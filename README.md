@@ -1,10 +1,13 @@
 # 语音提醒（VoiceTodo）
 
-原生 Kotlin + Jetpack Compose 的单页待办：点击录音 → 随包 sherpa-onnx 离线普通话转写 →
+原生 Kotlin + Jetpack Compose 的本地待办应用：点击录音 → 随包 sherpa-onnx 离线普通话转写 →
 可编辑标题 → 手动创建，或由用户自填的 OpenAI 兼容服务整理成一条可编辑草稿 →
 确认后保存事项 → 真实 AlarmManager 系统闹钟触发通知与响铃 → 关闭。
 
 - minSdk 29（Android 10+），targetSdk 34。
+- 底部导航包含待办、四象限、番茄、我的；“我的”集中提供提醒系统设置入口、
+  番茄计时设置、外观与字体、语音与 AI、权限状态、数据/回收站入口和关于页。
+- 外观支持浅色、深色、跟随系统与小/标准/大三档字体，修改即时生效并持久化。
 - 离线识别模型与原生库**随安装包**交付，首次启动断网可用。
 - 在线 AI 只在用户主动点“用在线 AI 整理”时发送当前文字、当前日期时间和时区；
   不发送录音、历史事项或全部待办。未配置 AI 时，手动创建和离线识别仍可用。
@@ -42,7 +45,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 ## 测试
 
 ```bash
-./gradlew :app:testDebugUnitTest          # JVM 106 项（含模拟 HTTP 服务端到端）
+./gradlew :app:testDebugUnitTest          # 当前证据轮次 JVM 120 项（含模拟 HTTP 服务端到端）
 ./gradlew :app:connectedDebugAndroidTest  # 设备仪器测试（需模拟器/真机 + 权限）
 ```
 

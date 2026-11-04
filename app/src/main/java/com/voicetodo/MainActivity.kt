@@ -9,27 +9,18 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Text
-import androidx.compose.ui.Modifier
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voicetodo.ui.PomodoroScreen
 import com.voicetodo.ui.PomodoroViewModel
+import com.voicetodo.ui.QuadrantScreen
+import com.voicetodo.ui.SettingsScreen
+import com.voicetodo.ui.SettingsViewModel
 import com.voicetodo.ui.TodoScreen
 import com.voicetodo.ui.TodoViewModel
+import com.voicetodo.ui.VoiceTodoNavigationHost
+import com.voicetodo.ui.VoiceTodoTheme
 
 class MainActivity : ComponentActivity() {
 
@@ -40,28 +31,28 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ensurePermissions()
         setContent {
-            MaterialTheme {
-                Surface {
-                    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-                    Column(Modifier.fillMaxSize()) {
-                        when (selectedTab) {
-                            0 -> {
-                                val vm: TodoViewModel = viewModel()
-                                TodoScreen(vm)
-                            }
-                            1 -> {
-                                val vm: PomodoroViewModel = viewModel()
-                                PomodoroScreen(vm)
-                            }
-                        }
-                        NavigationBar {
-                            NavigationBarItem(selected = selectedTab == 0, onClick = { selectedTab = 0 },
-                                icon = { Icon(Icons.Default.List, contentDescription = null) }, label = { Text("待办") })
-                            NavigationBarItem(selected = selectedTab == 1, onClick = { selectedTab = 1 },
-                                icon = { Icon(Icons.Default.Timer, contentDescription = null) }, label = { Text("番茄") })
-                        }
-                    }
-                }
+            val settingsViewModel: SettingsViewModel = viewModel()
+            val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
+            val todoViewModel: TodoViewModel = viewModel()
+            val pomodoroViewModel: PomodoroViewModel = viewModel()
+            val appVersion = runCatching {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }.getOrNull().orEmpty().ifBlank { "未知" }
+
+            VoiceTodoTheme(settingsState.preferences) {
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(todoViewModel) },
+                    quadrantContent = { QuadrantScreen(todoViewModel) },
+                    pomodoroContent = { PomodoroScreen(pomodoroViewModel) },
+                    settingsContent = {
+                        SettingsScreen(
+                            settingsVm = settingsViewModel,
+                            todoVm = todoViewModel,
+                            appVersion = appVersion,
+                            onOpenNotificationSettings = ::openNotificationSettings,
+                        )
+                    },
+                )
             }
         }
     }
@@ -94,6 +85,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun openNotificationSettings() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, VoiceTodoApp.CHANNEL_REMINDER)
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:$packageName"))
+        }
+        startActivity(intent)
     }
 }
 

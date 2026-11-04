@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 走完一张票的完整流程（复盘 #2）</title>
+<link rel="stylesheet" href="../assets/course.css">
+<style>
+  body { font-size: 17px; }
+  .phase { border-left: 3px solid var(--accent); padding: 0.2rem 0 0.2rem 1rem; margin: 0 0 1.4rem; }
+  .phase h3 { margin-top: 0.2rem; }
+  .pit { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 0.5rem 0.8rem; border-radius: 0 4px 4px 0; font-size: 0.9rem; margin: 0.6rem 0; }
+  .pit b { color: var(--warn); }
+  .ok { color: var(--accent); font-weight: 700; }
+  table td:first-child { white-space: nowrap; font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem; }
+</style>
+</head>
+<body>
+
+<p class="lesson-kicker">Reference · 速查表</p>
+<h1>走完一张票的完整流程</h1>
+<p class="subtitle">用 #2「最小闭环」这一圈的真实经过复盘。以后任何票、任何项目，照这张卡走。</p>
+
+<div class="callout">
+  <span class="label">这一圈的事实</span>
+  #2 从「拆好的一张小票」走到了「关闭」。中途修了 <strong>5 个真 bug</strong>、1 个环境坑、1 次假验收把关。下面每一步都是真发生过的，不是教科书。
+</div>
+
+<h2>整个循环长这样（五步 → 回到第一步）</h2>
+
+<div class="phase">
+  <h3>第 1 步 · 想清楚（这张票要什么）</h3>
+  <p>开工前先读票：#2 的四零件——标题、目的、<b>验收标准（6 条可打勾）</b>、边界（"不做 AI、不做重复、真机留 #3"）。<strong>验收标准决定什么叫"做完"。</strong></p>
+</div>
+
+<div class="phase">
+  <h3>第 2 步 · 拆小 / 认领（谁在做这张）</h3>
+  <p>确认它是 frontier（<code>blocked_by=0</code>、没人认领），然后 <code>gh issue edit 2 --add-assignee @me</code> 认领——把票移出 frontier，别人不重复做。</p>
+</div>
+
+<div class="phase">
+  <h3>第 3 步 · 做一块（让 AI 写，你下命令）</h3>
+  <p>在会话里把票交给 AI 实现。你做的是：给边界、看它往哪走、卡住时给准确诊断。这一圈里卡点全在"依赖"和"环境"，不在业务逻辑。</p>
+  <div class="pit"><b>坑 1 · 20 个编译错误其实是 1 个根因。</b>namespace 写错（<code>com.voicetodo.app</code> vs 代码全用 <code>com.voicetodo</code>）→ R 类找不到 → 连锁崩掉整片。修根因，20 个错塌成 0。<br><b>经验：报错先看"第一条"，别逐条追。</b></div>
+  <div class="pit"><b>坑 2 · 缺依赖会伪装成"语法错误"。</b>缺 <code>lifecycle-runtime-compose</code> → <code>collectAsStateWithLifecycle</code> 找不到 → RecordState 比较、Composable 上下文全报错。<br><b>经验：一大片"类型/上下文"错误，常是某个 import 符号没解析。</b></div>
+  <div class="pit"><b>坑 3 · 变量遮蔽。</b><code>private val app = app as VoiceTodoApp</code>，右侧 app 解析到属性自己 → 类型退化 → <code>app.scheduler</code> unresolved。<br><b>经验：属性名别和构造参数同名。</b></div>
+</div>
+
+<div class="phase">
+  <h3>第 4 步 · 验一块（拿硬证据，不接受口头）</h3>
+  <p>验收的唯一标准：<strong>能不能指着硬证据说"这就是它"</strong>。这一圈里的硬证据：</p>
+  <table>
+    <thead><tr><th>证据</th><th>证明什么</th></tr></thead>
+    <tbody>
+      <tr><td>单测 XML tests=8 failures=0</td><td>保存/取消/重开可见/删除取消闹钟</td></tr>
+      <tr><td>识别输出原文「对我做了介绍啊…嗯」</td><td>真 wav + 真模型 + 真识别（口水音骗不了人）</td></tr>
+      <tr><td>wav SHA-256 + 非零占比 0.989</td><td>不是静音/假数据</td></tr>
+      <tr><td>模型 81,828,675 B 精确值</td><td>随包模型完整，非残缺下载</td></tr>
+      <tr><td>dumpsys alarm tag=ALARM_FIRE</td><td>真系统闹钟，不是应用内计时器</td></tr>
+      <tr><td>APK 159,012,328 B</td><td>构建产物真实</td></tr>
+    </tbody>
+  </table>
+  <div class="pit"><b>坑 4 · 中文路径坑测试。</b>项目在 <code>E:\AI工程\…</code>，Windows 默认 GBK，test worker 的 classpath 响应文件解析成乱码 → <code>ClassNotFoundException</code>。<br><b>解法：建 ASCII junction <code>C:\dev\voicetodo</code> → 项目，从那儿跑 Gradle。</b></div>
+  <div class="pit"><b>坑 5 · dlopen 找不到 .so。</b>APK 里明明有 so，但 <code>useLegacyPackaging=false</code> 导致安装后没落地 → <code>UnsatisfiedLinkError: libsherpa-onnx-jni.so not found</code>。<br><b>解法：<code>useLegacyPackaging=true</code> + manifest <code>android:extractNativeLibs="true"</code>。</b></div>
+  <div class="pit"><b>坑 6 · assetManager 传错。</b>模型走绝对路径时 <code>OfflineRecognizer(context.assets, cfg)</code> 会 ReadFile 失败。<br><b>解法：绝对路径时 assetManager 必须传 <code>null</code>。</b></div>
+</div>
+
+<div class="phase">
+  <h3>第 5 步 · 复查 + 关票（把债还完再销账）</h3>
+  <p>顺序很重要，别跳：</p>
+  <ol class="steps">
+    <li><strong>证据落盘</strong>：<code>docs/evidence-ticket2.md</code>（wav SHA256、识别输出、断网报错）。</li>
+    <li><strong>核对 git 干不干净</strong>：<code>git ls-files | grep onnx\|aar</code> 应为空（大二进制不入库）；<code>git show --stat</code> 看提交带了啥。</li>
+    <li><strong>确认大文件判定</strong>：78MB 模型 = 一次性产物 → 不入库（用 URL+SHA256 复现）；175KB 测试 wav = 复现必需 → 入库。<b>这是分寸，不是"一律排除"。</b></li>
+    <li><strong>commit + push</strong>：本地 commit 先干净，再 push；评论里写的 commit 号必须 GitHub 上真能看到。</li>
+    <li><strong>写关票评论</strong>：逐条验收标准 × 硬证据，一条条对上；声明边界（真机留 #3、不声称已验证）。</li>
+    <li><strong>关票</strong>：<code>gh issue close 2 --comment "…；真机验收转 #3"</code>。关掉 #2 → #3 自动从"被阻塞"变"可开工"。</li>
+  </ol>
+</div>
+
+<h2>这一圈最该记住的 6 句话</h2>
+
+<table>
+  <tbody>
+    <tr><td>①</td><td><strong>报错看第一条</strong>，20 个错常是 1 个根因。</td></tr>
+    <tr><td>②</td><td><strong>验收只认硬证据</strong>：字节数、SHA256、logcat 输出、测试断言。不认"AI 说完成了"。</td></tr>
+    <tr><td>③</td><td><strong>假成功要当场戳穿</strong>：模型缺失时的"仪器测试通过"不算数。</td></tr>
+    <tr><td>④</td><td><strong>大文件不入 git，复现必需的小资产要入</strong>。看它是"一次性产物"还是"复现必需品"。</td></tr>
+    <tr><td>⑤</td><td><strong>关票是销账</strong>：证据钉死、历史干净、评论可查，才关。先别 push、先别关这种顺序不是啰嗦，是防返工。</td></tr>
+    <tr><td>⑥</td><td><strong>环境坑单独记</strong>：中文路径、编码、pagefile、ABI——这些不是业务 bug，但会让真 bug 被淹没。</td></tr>
+  </tbody>
+</table>
+
+<h2>下次开工的"开场三句"（模板）</h2>
+<pre><code>1) 这是 frontier 上唯一可开工的票吗？（blocked_by=0、未认领）
+2) 这张票的 6 条验收标准，每条对应什么硬证据？
+3) 做完先别关票：证据落盘 → git 干净 → 评论 → 我确认 → 再关。</code></pre>
+
+<div class="lesson-footer">
+  <div class="ask">
+    💬 <strong>随时问我。</strong>这张卡里任何一条（比如"为什么 namespace 错会连锁"、"junction 是什么"、"commit 号为什么必须 push 后才可见"）想展开，我都用你 App 的真实例子再讲一遍。
+  </div>
+</div>
+</body>
+</html>

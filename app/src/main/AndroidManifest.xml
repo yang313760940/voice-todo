@@ -50,6 +50,11 @@
             android:name=".alarm.AlarmActionReceiver"
             android:exported="false" />
 
+        <!-- 番茄阶段结束：系统到点通知，等待用户确认 -->
+        <receiver
+            android:name=".alarm.FocusAlarmReceiver"
+            android:exported="false" />
+
         <!-- 开机恢复未来闹钟 -->
         <receiver
             android:name=".alarm.BootReceiver"

@@ -5,6 +5,8 @@ import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoReminder
 import com.voicetodo.domain.Quadrant
 import java.time.Duration
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatterBuilder
@@ -119,9 +121,34 @@ interface TodoDao {
     @Insert suspend fun migrated(record: StorageMigration)
 }
 
-@Database(entities = [TodoEntity::class, DeliveryEntity::class, ReminderDeliveryEntity::class, StorageMigration::class], version = 3,
-    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)], exportSchema = true)
+@Database(
+    entities = [
+        TodoEntity::class,
+        DeliveryEntity::class,
+        ReminderDeliveryEntity::class,
+        StorageMigration::class,
+        FocusSessionEntity::class,
+        FocusSettingsEntity::class,
+    ],
+    version = 4,
+    autoMigrations = [
+        AutoMigration(from = 1, to = 2),
+        AutoMigration(from = 2, to = 3),
+    ],
+    exportSchema = true,
+)
 @TypeConverters(TimeConverters::class)
 abstract class TodoDatabase : RoomDatabase() {
     abstract fun todos(): TodoDao
+    abstract fun focus(): FocusDao
+
+    companion object {
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `focus_sessions` (`id` TEXT NOT NULL, `phase` TEXT NOT NULL, `startedAt` TEXT NOT NULL, `endsAt` TEXT NOT NULL, `lastResumedAt` TEXT NOT NULL, `durationSeconds` INTEGER NOT NULL, `pausedAt` TEXT, `accumulatedFocusSeconds` INTEGER NOT NULL, `completedPomodoros` INTEGER NOT NULL, `itemId` TEXT, `state` TEXT NOT NULL, `endedAt` TEXT, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `focus_settings` (`id` INTEGER NOT NULL, `focusMinutes` INTEGER NOT NULL, `shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, `longBreakEvery` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("INSERT INTO focus_settings (id, focusMinutes, shortBreakMinutes, longBreakMinutes, longBreakEvery) VALUES (1, 25, 5, 15, 4)")
+            }
+        }
+    }
 }

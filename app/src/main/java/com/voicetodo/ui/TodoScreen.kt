@@ -57,18 +57,27 @@ fun TodoScreen(vm: TodoViewModel) {
                     if (cap.canPostNotifications) "通知 ✓" else "通知 ✗",
                     if (cap.canRecordAudio) "麦克风 ✓" else "麦克风 ✗",
                 )
-                Text("权限：" + parts.joinToString("  "), style = MaterialTheme.typography.bodySmall)
+                Text("权限：" + parts.joinToString("  "), style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("record_permission_status"))
             }
         }
         item { StorageStatus(state, vm::onRetryStorage) }
         item {
             Button(onClick = vm::onToggleRecord, modifier = Modifier.fillMaxWidth().testTag("voice_button"),
-                enabled = enabled && state.recordState != RecordState.Transcribing) {
+                enabled = enabled && state.recordState != RecordState.Transcribing &&
+                    (state.recordState == RecordState.Recording ||
+                        (state.speechReady && state.capabilities?.canRecordAudio == true))) {
                 Text(when (state.recordState) {
-                    RecordState.Idle -> "开始录音"
+                    RecordState.Idle -> if (state.draftText.isBlank()) "开始录音" else "重新录音"
                     RecordState.Recording -> "结束录音"
                     RecordState.Transcribing -> "识别中…"
                 })
+            }
+            if (state.recordState != RecordState.Idle) {
+                TextButton(onClick = vm::onCancelRecording, enabled = enabled,
+                    modifier = Modifier.testTag("cancel_record_button")) {
+                    Text(if (state.recordState == RecordState.Recording) "取消录音" else "取消识别")
+                }
             }
         }
         item {
@@ -94,14 +103,25 @@ fun TodoScreen(vm: TodoViewModel) {
                 ?: "尚未选择提醒时间", style = MaterialTheme.typography.bodyMedium)
         }
         item {
-            Button(onClick = vm::onSave, enabled = enabled,
+            Button(onClick = vm::onOpenManualCreate,
+                enabled = enabled && state.recordState == RecordState.Idle,
+                modifier = Modifier.fillMaxWidth().testTag("manual_create_button")) {
+                Text("填写完整详情并创建")
+            }
+            Button(onClick = vm::onSave, enabled = enabled && state.recordState == RecordState.Idle,
                 modifier = Modifier.fillMaxWidth().testTag("save_button")) { Text("保存并安排提醒") }
-            OutlinedButton(onClick = vm::onSaveWithoutReminder, enabled = enabled,
+            OutlinedButton(onClick = vm::onSaveWithoutReminder,
+                enabled = enabled && state.recordState == RecordState.Idle,
                 modifier = Modifier.fillMaxWidth().testTag("save_without_reminder_button")) { Text("不设提醒直接保存") }
             TextButton(onClick = vm::onCancel, enabled = enabled,
                 modifier = Modifier.testTag("cancel_button")) { Text("取消草稿") }
         }
-        item { Message(state.message); HorizontalDivider(); Text("待办", style = MaterialTheme.typography.titleMedium) }
+        item {
+            InputError(state.inputError)
+            Message(state.message)
+            HorizontalDivider()
+            Text("待办", style = MaterialTheme.typography.titleMedium)
+        }
         if (state.items.isEmpty()) item { Text("暂无待办", style = MaterialTheme.typography.bodySmall) }
         itemsIndexed(state.items, key = { _, item -> "pending-${item.id}" }) { index, item ->
             ItemRow(item, state, vm.zoneId, "item_row_$index", enabled,
@@ -121,7 +141,8 @@ fun TodoScreen(vm: TodoViewModel) {
 @Composable
 private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft, enabled: Boolean) {
     val context = LocalContext.current
-    val editable = enabled && detail.original.completedAt == null
+    val original = detail.original
+    val editable = enabled && original?.completedAt == null
     fun pick(field: DetailField, text: String) {
         val initial = runCatching { LocalDate.parse(text.take(10)) }.getOrElse { state.now.atZone(vm.zoneId).toLocalDate() }
         DatePickerDialog(context, { _, year, month, day ->
@@ -139,7 +160,11 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
     }
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("detail_screen"),
         contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("事项详情", style = MaterialTheme.typography.headlineSmall); StorageStatus(state, vm::onRetryStorage) }
+        item {
+            Text(if (original == null) "创建事项" else "事项详情",
+                style = MaterialTheme.typography.headlineSmall)
+            StorageStatus(state, vm::onRetryStorage)
+        }
         item {
             OutlinedTextField(value = detail.title, onValueChange = vm::onDetailTitleChange,
                 label = { Text("标题") }, enabled = editable,
@@ -193,31 +218,41 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
                             enabled = editable, singleLine = true, label = { Text("截止前多少分钟") },
                             modifier = Modifier.fillMaxWidth().testTag("detail_reminder_value_$index"))
                     }
-                    TextButton(onClick = { vm.onRemoveReminder(index) }, enabled = editable,
-                        modifier = Modifier.testTag("remove_reminder_$index")) { Text("删除此提醒") }
+                    if (original != null) {
+                        TextButton(onClick = { vm.onRemoveReminder(index) }, enabled = editable,
+                            modifier = Modifier.testTag("remove_reminder_$index")) { Text("删除此提醒") }
+                    }
                 }
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Specified) }, enabled = editable,
-                    modifier = Modifier.testTag("add_specified_reminder")) { Text("新增指定提醒") }
-                OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Relative) }, enabled = editable,
-                    modifier = Modifier.testTag("add_relative_reminder")) { Text("新增相对提醒") }
+            if (original != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Specified) }, enabled = editable,
+                        modifier = Modifier.testTag("add_specified_reminder")) { Text("新增指定提醒") }
+                    OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Relative) }, enabled = editable,
+                        modifier = Modifier.testTag("add_relative_reminder")) { Text("新增相对提醒") }
+                }
             }
             Text("相对提醒按截止时间提前；计划日期不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
                 style = MaterialTheme.typography.bodySmall)
         }
-        item { ItemStatus(detail.original, state); Message(state.message) }
         item {
-            if (detail.original.completedAt == null) {
+            original?.let { ItemStatus(it, state) }
+            Message(state.message)
+        }
+        item {
+            if (original == null) {
+                Button(onClick = vm::onSaveDetail, enabled = editable,
+                    modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("创建事项") }
+            } else if (original.completedAt == null) {
                 Button(onClick = vm::onSaveDetail, enabled = editable,
                     modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("保存修改") }
-                OutlinedButton(onClick = { vm.onComplete(detail.original.id) }, enabled = enabled,
+                OutlinedButton(onClick = { vm.onComplete(original.id) }, enabled = enabled,
                     modifier = Modifier.fillMaxWidth().testTag("detail_complete_button")) { Text("完成事项") }
             } else {
                 Text("已完成事项请先恢复再编辑", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = { vm.onRestore(detail.original.id) }, enabled = enabled,
+                Button(onClick = { vm.onRestore(original.id) }, enabled = enabled,
                     modifier = Modifier.fillMaxWidth().testTag("detail_restore_button")) { Text("恢复事项") }
             }
             TextButton(onClick = vm::onCancelDetail, enabled = !state.busy,
@@ -303,4 +338,9 @@ private fun StorageStatus(state: UiState, onRetry: () -> Unit) {
 @Composable
 private fun Message(message: String?) {
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("message")) }
+}
+
+@Composable
+private fun InputError(message: String?) {
+    message?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("input_error")) }
 }

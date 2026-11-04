@@ -6,6 +6,7 @@ import com.voicetodo.speech.SherpaOfflineTranscriber
 import com.voicetodo.speech.TranscriptResult
 import com.voicetodo.speech.WavReader
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -22,6 +23,14 @@ class OfflineTranscriptionInstrumentedTest {
 
     @Test
     fun bundledModelTranscribesFixedMandarinAudioOffline() {
+        val packageInfo = context.packageManager.getPackageInfo(
+            context.packageName,
+            android.content.pm.PackageManager.GET_PERMISSIONS,
+        )
+        assertFalse(
+            "离线转写应用不应申请 INTERNET 权限",
+            packageInfo.requestedPermissions.orEmpty().contains(android.Manifest.permission.INTERNET),
+        )
         // 1) 模型已随包就绪（无下载）
         val transcriber = SherpaOfflineTranscriber(context)
         assertTrue("随包模型应就绪", transcriber.isReady())
@@ -31,23 +40,28 @@ class OfflineTranscriptionInstrumentedTest {
         testAssets.open("testwavs/0.wav").use { input ->
             wavFile.outputStream().use { out -> input.copyTo(out) }
         }
-        val wav = WavReader.read(wavFile)
+        try {
+            val wav = WavReader.read(wavFile)
 
-        // 3) 断网识别
-        disableNetwork()
-        val result = transcriber.transcribe(wav.samples, wav.sampleRate)
+            // 3) 断网识别
+            disableNetwork()
+            val result = transcriber.transcribe(wav.samples, wav.sampleRate)
 
-        // 4) 断言真实识别结果
-        assertTrue("应识别成功，实际：$result", result is TranscriptResult.Success)
-        val text = (result as TranscriptResult.Success).text
-        assertTrue("识别文字不应为空", text.isNotBlank())
-        // 结果应为中文（含汉字）
-        assertTrue("应包含汉字，实际：$text", text.any { it.code in 0x4E00..0x9FFF })
+            // 4) 断言真实识别结果
+            assertTrue("应识别成功，实际：$result", result is TranscriptResult.Success)
+            val text = (result as TranscriptResult.Success).text
+            assertTrue("识别文字不应为空", text.isNotBlank())
+            // 结果应为中文（含汉字）
+            assertTrue("应包含汉字，实际：$text", text.any { it.code in 0x4E00..0x9FFF })
 
-        // 输出到日志，便于在集成证据中记录
-        android.util.Log.i("OfflineIT", "RECOGNIZED_TEXT=$text")
-        File(context.getExternalFilesDir(null) ?: context.filesDir, "recognized.txt")
-            .writeText(text)
+            // 输出到日志，便于在集成证据中记录
+            android.util.Log.i("OfflineIT", "RECOGNIZED_TEXT=$text")
+            File(context.getExternalFilesDir(null) ?: context.filesDir, "recognized.txt")
+                .writeText(text)
+        } finally {
+            // 固定输入只作为测试临时文件存在，测试结束立即释放。
+            wavFile.delete()
+        }
     }
 
     private fun disableNetwork() {

@@ -22,10 +22,12 @@ class SherpaOfflineTranscriber(private val context: Context) : OfflineTranscribe
 
     private fun modelDir(): File {
         val dir = File(context.filesDir, "sherpa-model")
-        if (!File(dir, "model.int8.onnx").exists()) {
+        val model = File(dir, "model.int8.onnx")
+        val tokens = File(dir, "tokens.txt")
+        if (!model.isFile || model.length() == 0L || !tokens.isFile || tokens.length() == 0L) {
             dir.mkdirs()
-            copyAsset("sherpa/model.int8.onnx", File(dir, "model.int8.onnx"))
-            copyAsset("sherpa/tokens.txt", File(dir, "tokens.txt"))
+            copyAsset("sherpa/model.int8.onnx", model)
+            copyAsset("sherpa/tokens.txt", tokens)
         }
         return dir
     }
@@ -59,21 +61,29 @@ class SherpaOfflineTranscriber(private val context: Context) : OfflineTranscribe
     }
 
     override fun isReady(): Boolean {
-        return try {
-            context.assets.open("sherpa/model.int8.onnx").use { true }
-        } catch (e: Exception) {
-            false
-        }
+        return assetHasContent("sherpa/model.int8.onnx") && assetHasContent("sherpa/tokens.txt")
+    }
+
+    private fun assetHasContent(path: String): Boolean = try {
+        context.assets.open(path).use { it.read() >= 0 }
+    } catch (_: Exception) {
+        false
     }
 
     override fun transcribe(samples: FloatArray, sampleRate: Int): TranscriptResult {
+        if (!isReady()) return TranscriptResult.Failure("随包离线识别模型缺失或不完整")
+        if (samples.isEmpty()) return TranscriptResult.Failure("没有录到音频")
+        if (sampleRate != 16_000) return TranscriptResult.Failure("录音格式不兼容：需要 16000Hz 单声道音频")
         return try {
             val r = ensureRecognizer()
             val stream = r.createStream()
-            stream.acceptWaveform(samples, sampleRate)
-            r.decode(stream)
-            val text = r.getResult(stream).text.trim()
-            stream.release()
+            val text = try {
+                stream.acceptWaveform(samples, sampleRate)
+                r.decode(stream)
+                r.getResult(stream).text.trim()
+            } finally {
+                stream.release()
+            }
             if (text.isEmpty()) {
                 TranscriptResult.Failure("未识别到语音内容")
             } else {
@@ -81,7 +91,9 @@ class SherpaOfflineTranscriber(private val context: Context) : OfflineTranscribe
             }
         } catch (e: Throwable) {
             Log.e("SherpaOffline", "transcribe failed", e)
-            TranscriptResult.Failure("识别失败：${e.message ?: e.javaClass.simpleName}")
+            TranscriptResult.Failure(
+                "随包离线识别模型不兼容或无法加载：${e.message ?: e.javaClass.simpleName}",
+            )
         }
     }
 }

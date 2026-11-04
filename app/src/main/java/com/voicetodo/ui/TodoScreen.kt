@@ -1,163 +1,243 @@
 package com.voicetodo.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.isOverdue
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private val timeFmt = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+private val timeFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-/**
- * 单页待办界面。testTag 用于仪器测试稳定定位：
- * - voice_button 录音/结束
- * - title_field 可编辑标题
- * - hour_field / minute_field 手选时间
- * - save_button / cancel_button 保存与取消
- * - item_row_<index>
- */
 @Composable
 fun TodoScreen(vm: TodoViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
-
+    LifecycleResumeEffect(vm) {
+        vm.onRefresh()
+        onPauseOrDispose { }
+    }
+    BackHandler(enabled = state.detail != null) { vm.onCancelDetail() }
+    val enabled = !state.loading && !state.busy && state.storageError == null
+    val detail = state.detail
+    if (detail != null) {
+        DetailScreen(vm, state, detail, enabled)
+        return
+    }
     var hourText by remember { mutableStateOf("") }
     var minuteText by remember { mutableStateOf("") }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
+        contentPadding = PaddingValues(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("语音提醒", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-
-        // 能力状态：不谎称已就绪
-        state.capabilities?.let { cap ->
-            val parts = buildList {
-                add(if (cap.canScheduleExactAlarm) "精确闹钟 ✓" else "精确闹钟 ✗")
-                add(if (cap.canPostNotifications) "通知 ✓" else "通知 ✗")
-                add(if (cap.canRecordAudio) "麦克风 ✓" else "麦克风 ✗")
+        item {
+            Text("语音提醒", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            state.capabilities?.let { cap ->
+                val parts = listOf(
+                    if (cap.canScheduleExactAlarm) "精确闹钟 ✓" else "精确闹钟 ✗",
+                    if (cap.canPostNotifications) "通知 ✓" else "通知 ✗",
+                    if (cap.canRecordAudio) "麦克风 ✓" else "麦克风 ✗",
+                )
+                Text("权限：" + parts.joinToString("  "), style = MaterialTheme.typography.bodySmall)
             }
-            Text("权限：" + parts.joinToString("  "), style = MaterialTheme.typography.bodySmall)
         }
-
-        Button(
-            onClick = { vm.onToggleRecord() },
-            modifier = Modifier.fillMaxWidth().testTag("voice_button"),
-            enabled = state.recordState != RecordState.Transcribing,
-        ) {
-            Text(
-                when (state.recordState) {
+        item { StorageStatus(state, vm::onRetryStorage) }
+        item {
+            Button(onClick = vm::onToggleRecord, modifier = Modifier.fillMaxWidth().testTag("voice_button"),
+                enabled = enabled && state.recordState != RecordState.Transcribing) {
+                Text(when (state.recordState) {
                     RecordState.Idle -> "开始录音"
                     RecordState.Recording -> "结束录音"
                     RecordState.Transcribing -> "识别中…"
+                })
+            }
+        }
+        item {
+            OutlinedTextField(value = state.draftText, onValueChange = vm::onDraftTextChange,
+                label = { Text("识别文字 / 标题（可编辑）") }, enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("title_field"))
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = hourText, onValueChange = { hourText = it.filter(Char::isDigit).take(2) },
+                    label = { Text("时") }, enabled = enabled,
+                    modifier = Modifier.weight(1f).testTag("hour_field"))
+                OutlinedTextField(value = minuteText, onValueChange = { minuteText = it.filter(Char::isDigit).take(2) },
+                    label = { Text("分") }, enabled = enabled,
+                    modifier = Modifier.weight(1f).testTag("minute_field"))
+                Button(onClick = {
+                    val h = hourText.toIntOrNull()
+                    val m = minuteText.toIntOrNull()
+                    if (h != null && m != null && h in 0..23 && m in 0..59) vm.onPickTime(h, m)
+                }, enabled = enabled, modifier = Modifier.testTag("pick_time_button")) { Text("定时间") }
+            }
+            Text(state.draftTime?.let { "提醒时间：${it.atZone(vm.zoneId).format(timeFmt)}" }
+                ?: "尚未选择提醒时间", style = MaterialTheme.typography.bodyMedium)
+        }
+        item {
+            Button(onClick = vm::onSave, enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("save_button")) { Text("保存并安排提醒") }
+            OutlinedButton(onClick = vm::onSaveWithoutReminder, enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("save_without_reminder_button")) { Text("不设提醒直接保存") }
+            TextButton(onClick = vm::onCancel, enabled = enabled,
+                modifier = Modifier.testTag("cancel_button")) { Text("取消草稿") }
+        }
+        item { Message(state.message); HorizontalDivider(); Text("待办", style = MaterialTheme.typography.titleMedium) }
+        if (state.items.isEmpty()) item { Text("暂无待办", style = MaterialTheme.typography.bodySmall) }
+        itemsIndexed(state.items, key = { _, item -> "pending-${item.id}" }) { index, item ->
+            ItemRow(item, state, vm.zoneId, "item_row_$index", enabled,
+                onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onComplete(item.id) },
+                onDelete = { vm.onDelete(item.id) })
+        }
+        item { HorizontalDivider(); Text("已完成", style = MaterialTheme.typography.titleMedium) }
+        if (state.completedItems.isEmpty()) item { Text("暂无已完成事项", style = MaterialTheme.typography.bodySmall) }
+        itemsIndexed(state.completedItems, key = { _, item -> "completed-${item.id}" }) { index, item ->
+            ItemRow(item, state, vm.zoneId, "completed_row_$index", enabled,
+                onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onRestore(item.id) },
+                onDelete = { vm.onDelete(item.id) })
+        }
+    }
+}
+
+@Composable
+private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft, enabled: Boolean) {
+    val context = LocalContext.current
+    val editable = enabled && detail.original.completedAt == null
+    fun pick(field: DetailField, text: String) {
+        val initial = runCatching { LocalDate.parse(text.take(10)) }.getOrElse { state.now.atZone(vm.zoneId).toLocalDate() }
+        DatePickerDialog(context, { _, year, month, day ->
+            val date = LocalDate.of(year, month + 1, day)
+            if (field == DetailField.Plan) vm.onDetailValueChange(field, date.toString())
+            else {
+                val time = runCatching { LocalDateTime.parse(text.replace(' ', 'T')).toLocalTime() }
+                    .getOrElse { LocalTime.of(9, 0) }
+                TimePickerDialog(context, { _, hour, minute ->
+                    vm.onDetailValueChange(field, LocalDateTime.of(date, LocalTime.of(hour, minute))
+                        .format(timeFmt))
+                }, time.hour, time.minute, true).show()
+            }
+        }, initial.year, initial.monthValue - 1, initial.dayOfMonth).show()
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("detail_screen"),
+        contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("事项详情", style = MaterialTheme.typography.headlineSmall); StorageStatus(state, vm::onRetryStorage) }
+        item {
+            OutlinedTextField(value = detail.title, onValueChange = vm::onDetailTitleChange,
+                label = { Text("标题") }, enabled = editable,
+                modifier = Modifier.fillMaxWidth().testTag("detail_title_field"))
+        }
+        item {
+            DateField("计划日期", "yyyy-MM-dd", detail.plannedDate, "plannedDate", editable,
+                onChange = { vm.onDetailValueChange(DetailField.Plan, it) },
+                onPick = { pick(DetailField.Plan, detail.plannedDate) })
+        }
+        item {
+            DateField("截止时间", "yyyy-MM-dd HH:mm", detail.dueAt, "dueAt", editable,
+                onChange = { vm.onDetailValueChange(DetailField.Due, it) },
+                onPick = { pick(DetailField.Due, detail.dueAt) })
+        }
+        item {
+            DateField("提醒时间", "yyyy-MM-dd HH:mm", detail.remindAt, "remindAt", editable,
+                onChange = { vm.onDetailValueChange(DetailField.Reminder, it) },
+                onPick = { pick(DetailField.Reminder, detail.remindAt) })
+            Text("计划日期和截止时间不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
+                style = MaterialTheme.typography.bodySmall)
+        }
+        item { ItemStatus(detail.original, state); Message(state.message) }
+        item {
+            if (detail.original.completedAt == null) {
+                Button(onClick = vm::onSaveDetail, enabled = editable,
+                    modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("保存修改") }
+                OutlinedButton(onClick = { vm.onComplete(detail.original.id) }, enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().testTag("detail_complete_button")) { Text("完成事项") }
+            } else {
+                Text("已完成事项请先恢复再编辑", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = { vm.onRestore(detail.original.id) }, enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().testTag("detail_restore_button")) { Text("恢复事项") }
+            }
+            TextButton(onClick = vm::onCancelDetail, enabled = !state.busy,
+                modifier = Modifier.testTag("detail_cancel_button")) { Text("返回 / 取消修改") }
+        }
+    }
+}
+
+@Composable
+private fun DateField(label: String, format: String, value: String, tag: String, enabled: Boolean,
+    onChange: (String) -> Unit, onPick: () -> Unit) {
+    Column {
+        OutlinedTextField(value = value, onValueChange = onChange, enabled = enabled, singleLine = true,
+            label = { Text(label) }, placeholder = { Text(format) },
+            modifier = Modifier.fillMaxWidth().testTag("detail_${tag}_field"))
+        Row {
+            TextButton(onClick = onPick, enabled = enabled, modifier = Modifier.testTag("pick_$tag")) { Text("选择$label") }
+            TextButton(onClick = { onChange("") }, enabled = enabled, modifier = Modifier.testTag("clear_$tag")) { Text("清除$label") }
+        }
+    }
+}
+
+@Composable
+private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, enabled: Boolean,
+    onOpen: () -> Unit, onAction: () -> Unit, onDelete: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(tag).clickable(enabled = enabled, onClick = onOpen)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(item.title, fontWeight = FontWeight.Medium)
+            item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
+            item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
+            Text(item.remindAt?.let { "提醒：${it.atZone(zone).format(timeFmt)}" } ?: "无提醒",
+                style = MaterialTheme.typography.bodySmall)
+            ItemStatus(item, state)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onOpen, enabled = enabled, modifier = Modifier.testTag("open_${item.id}")) { Text("详情") }
+                TextButton(onClick = onAction, enabled = enabled,
+                    modifier = Modifier.testTag(if (item.completedAt == null) "complete_${item.id}" else "restore_${item.id}")) {
+                    Text(if (item.completedAt == null) "完成" else "恢复")
                 }
-            )
-        }
-
-        OutlinedTextField(
-            value = state.draftText,
-            onValueChange = { vm.onDraftTextChange(it) },
-            label = { Text("识别文字 / 标题（可编辑）") },
-            modifier = Modifier.fillMaxWidth().testTag("title_field"),
-        )
-
-        // 手选一个未来时间
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = hourText,
-                onValueChange = { hourText = it.filter { c -> c.isDigit() }.take(2) },
-                label = { Text("时") },
-                modifier = Modifier.weight(1f).testTag("hour_field"),
-            )
-            OutlinedTextField(
-                value = minuteText,
-                onValueChange = { minuteText = it.filter { c -> c.isDigit() }.take(2) },
-                label = { Text("分") },
-                modifier = Modifier.weight(1f).testTag("minute_field"),
-            )
-            Button(
-                onClick = {
-                    val h = hourText.toIntOrNull() ?: return@Button
-                    val m = minuteText.toIntOrNull() ?: return@Button
-                    if (h in 0..23 && m in 0..59) vm.onPickTime(h, m)
-                },
-                modifier = Modifier.testTag("pick_time_button"),
-            ) { Text("定时间") }
-        }
-
-        Text(
-            if (state.draftHasTime) "提醒时间：${state.draftTime?.atZone(java.time.ZoneId.systemDefault())?.format(timeFmt)}"
-            else "尚未选择提醒时间",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = { vm.onSave() }, modifier = Modifier.weight(1f).testTag("save_button")) {
-                Text("保存并安排提醒")
-            }
-            OutlinedButton(onClick = { vm.onCancel() }, modifier = Modifier.weight(1f).testTag("cancel_button")) {
-                Text("取消")
-            }
-        }
-
-        state.message?.let { msg ->
-            Text(msg, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("message"))
-        }
-
-        HorizontalDivider()
-
-        Text("已保存事项", style = MaterialTheme.typography.titleMedium)
-        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-            items(state.items, key = { it.id }) { item ->
-                ItemRow(item, onDelete = { vm.onDelete(item.id) },
-                    tag = "item_row_${state.items.indexOf(item)}")
+                TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
             }
         }
     }
 }
 
 @Composable
-private fun ItemRow(item: TodoItem, onDelete: () -> Unit, tag: String) {
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(tag)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(item.title, fontWeight = FontWeight.Medium)
-                item.remindAt?.let { at ->
-                    Text("提醒：${at.atZone(java.time.ZoneId.systemDefault()).format(timeFmt)}", style = MaterialTheme.typography.bodySmall)
-                } ?: Text("无提醒", style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = onDelete) { Text("删除") }
-        }
+private fun ItemStatus(item: TodoItem, state: UiState) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (item.id in state.deliveredIds) Text("已提醒", modifier = Modifier.testTag("delivered_${item.id}"),
+            style = MaterialTheme.typography.labelMedium)
+        if (item.isOverdue(state.now)) Text("逾期", color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("overdue_${item.id}"), style = MaterialTheme.typography.labelMedium)
+        if (item.completedAt != null) Text("已完成", style = MaterialTheme.typography.labelMedium)
     }
-    Spacer(Modifier.height(0.dp))
+}
+
+@Composable
+private fun StorageStatus(state: UiState, onRetry: () -> Unit) {
+    if (state.loading) Text("正在准备本地数据…")
+    state.storageError?.let {
+        Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("storage_error"))
+        OutlinedButton(onClick = onRetry, enabled = !state.busy,
+            modifier = Modifier.testTag("retry_storage_button")) { Text("重试数据迁移") }
+    }
+}
+
+@Composable
+private fun Message(message: String?) {
+    message?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("message")) }
 }

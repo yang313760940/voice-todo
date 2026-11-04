@@ -70,7 +70,7 @@ class AlarmReceiver : BroadcastReceiver() {
 
         internal fun showFallbackNotification(context: Context, item: TodoItem): Boolean = try {
             context.getSystemService(NotificationManager::class.java).notify(
-        notificationIdFor(item.id), AlarmNotification.build(context, item.id, item.title))
+                notificationIdFor(item.id), AlarmNotification.build(context, item.id, item.title))
             true
         } catch (e: Exception) {
             android.util.Log.w(TAG, "提醒通知不可用", e)

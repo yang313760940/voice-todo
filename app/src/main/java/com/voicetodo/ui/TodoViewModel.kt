@@ -6,6 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.domain.TodoEdit
+import com.voicetodo.domain.ReminderOutcome
+import com.voicetodo.domain.Clock
+import com.voicetodo.domain.SystemClock
+import com.voicetodo.data.RoomTodoRepository
+import com.voicetodo.data.StorageState
 import com.voicetodo.speech.OfflineTranscriber
 import com.voicetodo.speech.PcmRecorder
 import com.voicetodo.speech.SherpaOfflineTranscriber
@@ -16,16 +23,61 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.LocalDate
+import java.time.format.DateTimeParseException
 
 /** 录音状态机。 */
 enum class RecordState { Idle, Recording, Transcribing }
 
+enum class DetailField { Plan, Due, Reminder }
+
+data class DetailDraft(
+    val original: TodoItem,
+    val title: String,
+    val plannedDate: String,
+    val dueAt: String,
+    val remindAt: String,
+) {
+    fun edit(zone: ZoneId): TodoEdit {
+        fun parseTime(text: String, originalTime: Instant?): Instant? {
+            if (text == timeText(originalTime, zone)) return originalTime
+            return text.trim().takeIf { it.isNotEmpty() }
+                ?.let { LocalDateTime.parse(it.replace(' ', 'T')).atZone(zone).toInstant() }
+        }
+        try {
+            return TodoEdit(title, plannedDate.trim().takeIf { it.isNotEmpty() }?.let(LocalDate::parse),
+                parseTime(dueAt, original.dueAt), parseTime(remindAt, original.remindAt))
+        } catch (e: DateTimeParseException) {
+            throw IllegalArgumentException("日期格式：yyyy-MM-dd；时间格式：yyyy-MM-dd HH:mm", e)
+        }
+    }
+
+    companion object {
+        fun from(item: TodoItem, zone: ZoneId) = DetailDraft(item, item.title,
+            item.plannedDate?.toString().orEmpty(), timeText(item.dueAt, zone), timeText(item.remindAt, zone))
+        fun timeText(at: Instant?, zone: ZoneId): String =
+            at?.atZone(zone)?.toLocalDateTime()?.toString()?.replace('T', ' ').orEmpty()
+    }
+}
+
 data class UiState(
     val items: List<TodoItem> = emptyList(),
+    val completedItems: List<TodoItem> = emptyList(),
+    val deliveredIds: Set<String> = emptySet(),
+    val detail: DetailDraft? = null,
+    val loading: Boolean = true,
+    val busy: Boolean = false,
+    val storageError: String? = null,
+    val now: Instant = Instant.EPOCH,
     val recordState: RecordState = RecordState.Idle,
     val draftText: String = "",
     val draftHasTime: Boolean = false,
@@ -38,32 +90,83 @@ data class UiState(
  * 单页待办 ViewModel：录音 → 离线转写 → 可编辑标题 → 手选时间 → 保存/取消。
  * 通过 [VoiceTodoApp.useCases] 统一入口持久化并调度系统闹钟。
  */
-class TodoViewModel(app: Application) : AndroidViewModel(app) {
-
-    private val appContext = app as VoiceTodoApp
-    private val transcriber: OfflineTranscriber = SherpaOfflineTranscriber(appContext)
+class TodoViewModel @JvmOverloads constructor(
+    app: Application,
+    private val useCases: TodoUseCases = (app as VoiceTodoApp).useCases,
+    private val storage: RoomTodoRepository = (app as VoiceTodoApp).repository,
+    private val capabilities: () -> ReminderCapabilities = { (app as VoiceTodoApp).scheduler.capabilities() },
+    private val transcriber: OfflineTranscriber = SherpaOfflineTranscriber(app),
+    private val clock: Clock = SystemClock(),
+    val zoneId: ZoneId = ZoneId.systemDefault(),
+) : AndroidViewModel(app) {
     private val recorder = PcmRecorder()
-    private val zoneId: ZoneId = ZoneId.systemDefault()
+    private val operations = Mutex()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
-        refresh()
         _state.value = _state.value.copy(
-            capabilities = appContext.scheduler.capabilities(),
+            capabilities = capabilities(),
+            now = clock.now(),
             message = if (!transcriber.isReady()) "随包模型缺失" else null,
         )
+        viewModelScope.launch {
+            storage.state.collect { status ->
+                _state.value = _state.value.copy(loading = when (status) {
+                    StorageState.Loading -> true
+                    is StorageState.Failed -> false
+                    StorageState.Ready -> _state.value.loading
+                },
+                    storageError = (status as? StorageState.Failed)?.message)
+            }
+        }
+        refresh()
+        viewModelScope.launch {
+            while (isActive) {
+                delay(1_000)
+                _state.value = _state.value.copy(now = clock.now())
+            }
+        }
     }
 
     private fun refresh() {
         viewModelScope.launch {
-            _state.value = _state.value.copy(items = appContext.useCases.listItems())
+            try { operations.withLock { reload() } } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.value = _state.value.copy(message = e.message)
+            }
         }
     }
 
+    private suspend fun reload() {
+        val pending = useCases.listIncomplete()
+        val completed = useCases.listCompleted()
+        val delivered = (pending + completed).filter { useCases.wasDelivered(it) }.map { it.id }.toSet()
+        _state.value = _state.value.copy(items = pending, completedItems = completed,
+            deliveredIds = delivered, now = clock.now(), loading = false)
+    }
+
+    private fun action(block: suspend () -> Unit) {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(busy = true, message = null)
+        viewModelScope.launch {
+            try { operations.withLock { block() } } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _state.value = _state.value.copy(message = e.message ?: "操作失败")
+            } finally { _state.value = _state.value.copy(busy = false) }
+        }
+    }
+
+    fun onRefresh() {
+        refreshCapabilities()
+        if (!_state.value.busy) refresh()
+    }
+
+    fun onRetryStorage() = action { storage.initialize(); reload() }
+
     fun refreshCapabilities() {
-        _state.value = _state.value.copy(capabilities = appContext.scheduler.capabilities())
+        _state.value = _state.value.copy(capabilities = capabilities())
     }
 
     fun onToggleRecord() {
@@ -113,49 +216,96 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 用户手选一个未来时间。 */
     fun onPickTime(hour: Int, minute: Int) {
-        val now = LocalDateTime.now(zoneId)
+        val now = LocalDateTime.ofInstant(clock.now(), zoneId)
         var at = LocalDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute))
         if (!at.isAfter(now)) at = at.plusDays(1)
         _state.value = _state.value.copy(draftHasTime = true, draftTime = at.atZone(zoneId).toInstant())
     }
 
-    fun onSave() {
+    fun onSave() = save(withoutReminder = false)
+    fun onSaveWithoutReminder() = save(withoutReminder = true)
+
+    private fun save(withoutReminder: Boolean) {
         val s = _state.value
-        val at = s.draftTime
-        if (!s.draftHasTime || at == null) {
+        val at = if (withoutReminder) null else s.draftTime
+        if (!withoutReminder && (!s.draftHasTime || at == null)) {
             _state.value = s.copy(message = "请先选择提醒时间")
             return
         }
-        viewModelScope.launch {
-            try {
-                val result = appContext.useCases.confirmDraft(s.draftText, at)
-                val message = when (result.outcome) {
-                    com.voicetodo.domain.ReminderOutcome.NotRequested -> "事项已保存（未设置提醒）"
-                    com.voicetodo.domain.ReminderOutcome.Scheduled -> "已保存并安排提醒"
-                    com.voicetodo.domain.ReminderOutcome.NotReady -> "事项已保存，但提醒未就绪（缺精确闹钟权限）"
-                }
-                _state.value = _state.value.copy(
-                    draftText = "", draftHasTime = false, draftTime = null,
-                    message = message,
-                )
-                _state.value = _state.value.copy(items = appContext.useCases.listItems())
-            } catch (e: IllegalArgumentException) {
-                _state.value = _state.value.copy(message = e.message ?: "保存失败")
-            }
+        action {
+            val result = useCases.confirmDraft(s.draftText, at)
+            _state.value = _state.value.copy(
+                draftText = "", draftHasTime = false, draftTime = null,
+                message = outcomeMessage(result.outcome),
+            )
+            reload()
         }
     }
 
     fun onCancel() {
+        if (_state.value.busy) return
         _state.value = _state.value.copy(
             draftText = "", draftHasTime = false, draftTime = null, message = null,
         )
     }
 
     fun onDelete(id: String) {
-        viewModelScope.launch {
-            appContext.useCases.deleteItem(id)
-            _state.value = _state.value.copy(items = appContext.useCases.listItems())
+        action {
+            useCases.deleteItem(id)
+            reload()
         }
+    }
+
+    fun onOpenDetail(id: String) = action {
+        _state.value = _state.value.copy(detail = DetailDraft.from(useCases.findItem(id), zoneId))
+    }
+
+    fun onDetailTitleChange(title: String) {
+        if (!_state.value.busy) _state.value = _state.value.copy(detail = _state.value.detail?.copy(title = title))
+    }
+
+    fun onDetailValueChange(field: DetailField, value: String) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(detail = when (field) {
+            DetailField.Plan -> detail.copy(plannedDate = value)
+            DetailField.Due -> detail.copy(dueAt = value)
+            DetailField.Reminder -> detail.copy(remindAt = value)
+        })
+    }
+
+    fun onCancelDetail() {
+        if (!_state.value.busy) _state.value = _state.value.copy(detail = null, message = null)
+    }
+
+    fun onSaveDetail() {
+        val detail = _state.value.detail ?: return
+        action {
+            val result = useCases.updateItem(detail.original.id, detail.edit(zoneId))
+            _state.value = _state.value.copy(detail = null,
+                message = result.outcome?.let(::outcomeMessage) ?: "事项已更新（提醒安排未改变）")
+            reload()
+        }
+    }
+
+    fun onComplete(id: String) = action {
+        useCases.completeItem(id)
+        _state.value = _state.value.copy(detail = null, message = "事项已完成，未来提醒已取消")
+        reload()
+    }
+
+    fun onRestore(id: String) = action {
+        val result = useCases.restoreItem(id)
+        _state.value = _state.value.copy(detail = null, message = if (result.pastReminderCleared) {
+            "旧提醒已过期，已清除；请重新安排提醒"
+        } else "事项已恢复。${outcomeMessage(result.outcome)}")
+        reload()
+    }
+
+    private fun outcomeMessage(outcome: ReminderOutcome): String = when (outcome) {
+        ReminderOutcome.NotRequested -> "事项已保存（未设置提醒）"
+        ReminderOutcome.Scheduled -> "已保存并安排提醒"
+        ReminderOutcome.NotReady -> "事项已保存，但提醒未就绪（缺精确闹钟权限或系统限制）"
     }
 
     /** 供仪器测试注入固定音频并识别（跳过麦克风）。 */

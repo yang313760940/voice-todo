@@ -6,7 +6,6 @@ import com.voicetodo.speech.SherpaOfflineTranscriber
 import com.voicetodo.speech.TranscriptResult
 import com.voicetodo.speech.WavReader
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -23,14 +22,8 @@ class OfflineTranscriptionInstrumentedTest {
 
     @Test
     fun bundledModelTranscribesFixedMandarinAudioOffline() {
-        val packageInfo = context.packageManager.getPackageInfo(
-            context.packageName,
-            android.content.pm.PackageManager.GET_PERMISSIONS,
-        )
-        assertFalse(
-            "离线转写应用不应申请 INTERNET 权限",
-            packageInfo.requestedPermissions.orEmpty().contains(android.Manifest.permission.INTERNET),
-        )
+        // 应用为“用户自填在线 AI”声明了 INTERNET；本测试仍在断网状态下跑完整转写，
+        // 证明语音识别路径不依赖网络，而不是靠“应用没有网络权限”来间接证明。
         // 1) 模型已随包就绪（无下载）
         val transcriber = SherpaOfflineTranscriber(context)
         assertTrue("随包模型应就绪", transcriber.isReady())

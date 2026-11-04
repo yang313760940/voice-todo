@@ -5,11 +5,22 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.ReminderCapabilities
+import com.voicetodo.ai.AiAssistClient
+import com.voicetodo.ai.AiAssistException
+import com.voicetodo.ai.AiDraft
+import com.voicetodo.ai.AiPromptContext
+import com.voicetodo.ai.AiReminderDraft
+import com.voicetodo.ai.AiReminderKind
+import com.voicetodo.ai.AiSettings
+import com.voicetodo.ai.AiSettingsStore
+import com.voicetodo.ai.EncryptedAiSettingsStore
+import com.voicetodo.ai.OpenAiCompatibleClient
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.domain.TodoEdit
 import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.ReminderEdit
+import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.Clock
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.data.RoomTodoRepository
@@ -47,6 +58,18 @@ enum class RecordState { Idle, Recording, Transcribing }
 enum class DetailField { Plan, Due, Reminder }
 
 enum class ReminderDraftKind { Specified, Relative }
+
+enum class AiSettingsField { BaseUrl, Model, ApiKey }
+
+data class AiSettingsForm(
+    val baseUrl: String = "",
+    val model: String = "",
+    val apiKey: String = "",
+    val error: String? = null,
+) {
+    override fun toString(): String =
+        "AiSettingsForm(baseUrl=$baseUrl, model=$model, apiKey=***, error=$error)"
+}
 
 data class ReminderDraft(
     val id: String = UUID.randomUUID().toString(),
@@ -121,6 +144,11 @@ data class UiState(
     val inputError: String? = null,
     val message: String? = null,
     val capabilities: ReminderCapabilities? = null,
+    val aiConfigured: Boolean = false,
+    val aiSettingsForm: AiSettingsForm? = null,
+    val aiDraft: AiDraft? = null,
+    val aiBusy: Boolean = false,
+    val aiError: String? = null,
 )
 
 /**
@@ -136,12 +164,16 @@ class TodoViewModel @JvmOverloads constructor(
     private val clock: Clock = SystemClock(),
     val zoneId: ZoneId = ZoneId.systemDefault(),
     private val recorder: AudioRecorder = PcmRecorder(),
+    private val aiSettingsStore: AiSettingsStore = EncryptedAiSettingsStore(app),
+    private val aiClient: AiAssistClient = OpenAiCompatibleClient(),
 ) : AndroidViewModel(app) {
     private val operations = Mutex()
     private var transcriptionJob: Job? = null
     private var speechGeneration = 0L
     private var draftRevision = 0L
     private var recordingStartRevision = 0L
+    private var aiJob: Job? = null
+    private var aiGeneration = 0L
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -153,6 +185,7 @@ class TodoViewModel @JvmOverloads constructor(
             now = clock.now(),
             speechReady = speechReady,
             inputError = if (!speechReady) "随包离线识别模型缺失或不完整；仍可使用文字输入" else null,
+            aiConfigured = runCatching { aiSettingsStore.load() }.getOrNull() != null,
         )
         viewModelScope.launch {
             storage.state.collect { status ->
@@ -196,7 +229,11 @@ class TodoViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             try { operations.withLock { block() } } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.value = _state.value.copy(message = e.message ?: "操作失败")
+                val error = e.message ?: "操作失败"
+                _state.value = _state.value.copy(
+                    message = error,
+                    aiError = if (_state.value.aiDraft != null) error else _state.value.aiError,
+                )
             } finally { _state.value = _state.value.copy(busy = false) }
         }
     }
@@ -221,6 +258,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onToggleRecord() {
         when (_state.value.recordState) {
             RecordState.Idle -> {
+                invalidateAiRequest()
                 if (_state.value.capabilities?.canRecordAudio != true) {
                     _state.value = _state.value.copy(
                         inputError = "未授予麦克风权限；仍可使用文字输入",
@@ -301,6 +339,7 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onDraftTextChange(text: String) {
+        invalidateAiRequest()
         draftRevision++
         _state.value = _state.value.copy(draftText = text, inputError = null)
     }
@@ -371,11 +410,219 @@ class TodoViewModel @JvmOverloads constructor(
     fun onCancel() {
         if (_state.value.busy) return
         onCancelRecording()
+        invalidateAiRequest()
         draftRevision++
         _state.value = _state.value.copy(
             draftText = "", draftHasTime = false, draftTime = null,
             inputError = null, message = null,
         )
+    }
+
+    fun onOpenAiSettings() {
+        val saved = runCatching { aiSettingsStore.load() }.getOrNull()
+        _state.value = _state.value.copy(
+            aiSettingsForm = AiSettingsForm(
+                baseUrl = saved?.baseUrl.orEmpty(),
+                model = saved?.model.orEmpty(),
+                apiKey = saved?.apiKey.orEmpty(),
+            ),
+            aiConfigured = saved != null,
+            aiError = null,
+        )
+    }
+
+    fun onAiSettingsChange(field: AiSettingsField, value: String) {
+        val form = _state.value.aiSettingsForm ?: return
+        _state.value = _state.value.copy(
+            aiSettingsForm = when (field) {
+                AiSettingsField.BaseUrl -> form.copy(baseUrl = value, error = null)
+                AiSettingsField.Model -> form.copy(model = value, error = null)
+                AiSettingsField.ApiKey -> form.copy(apiKey = value, error = null)
+            }
+        )
+    }
+
+    fun onSaveAiSettings() {
+        val form = _state.value.aiSettingsForm ?: return
+        val clean = try {
+            AiSettings(form.baseUrl, form.model, form.apiKey).validate()
+        } catch (e: IllegalArgumentException) {
+            _state.value = _state.value.copy(aiSettingsForm = form.copy(error = e.message))
+            return
+        }
+        try {
+            aiSettingsStore.save(clean)
+            _state.value = _state.value.copy(
+                aiSettingsForm = null,
+                aiConfigured = true,
+                aiError = null,
+                message = "AI 服务配置已保存（密钥已加密存储，不进入日志或备份）",
+            )
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(
+                aiSettingsForm = form.copy(error = "配置保存失败，请重试"),
+            )
+        }
+    }
+
+    fun onClearAiSettings() {
+        try {
+            aiSettingsStore.clear()
+            _state.value = _state.value.copy(
+                aiSettingsForm = null,
+                aiConfigured = false,
+                aiError = null,
+                message = "已清除 AI 配置；仍可手动创建事项",
+            )
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(
+                aiSettingsForm = (_state.value.aiSettingsForm ?: AiSettingsForm())
+                    .copy(error = "清除配置失败，请重试"),
+            )
+        }
+    }
+
+    fun onCloseAiSettings() {
+        _state.value = _state.value.copy(aiSettingsForm = null, aiError = null)
+    }
+
+    /** 用户主动提交当前文字；失败不自动重试，也不清空文字。 */
+    fun onOrganizeWithAi() {
+        val current = _state.value
+        if (current.aiBusy) return
+        if (current.recordState != RecordState.Idle) {
+            _state.value = current.copy(inputError = "请先结束或取消当前录音识别")
+            return
+        }
+        val settings = runCatching { aiSettingsStore.load() }.getOrNull()
+        if (settings == null) {
+            _state.value = current.copy(
+                aiSettingsForm = AiSettingsForm(),
+                aiError = null,
+                message = "请先在高级设置中配置 AI 服务地址、模型和密钥",
+            )
+            return
+        }
+        if (current.draftText.isBlank()) {
+            _state.value = current.copy(inputError = "请先输入或识别事项文字")
+            return
+        }
+
+        aiGeneration++
+        aiJob?.cancel()
+        val generation = aiGeneration
+        val source = current.draftText
+        _state.value = current.copy(aiBusy = true, aiError = null, inputError = null, message = null)
+        aiJob = viewModelScope.launch {
+            try {
+                val draft = aiClient.organize(
+                    source,
+                    AiPromptContext(now = clock.now(), zoneId = zoneId),
+                    settings,
+                )
+                if (generation == aiGeneration) {
+                    _state.value = _state.value.copy(aiBusy = false, aiDraft = draft, aiError = null)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (generation == aiGeneration) {
+                    _state.value = _state.value.copy(
+                        aiBusy = false,
+                        aiError = (e as? AiAssistException)?.message
+                            ?: "AI 整理失败；文字已保留，可手动创建",
+                    )
+                }
+            }
+        }
+    }
+
+    fun onCancelAiRequest() = invalidateAiRequest(showMessage = true)
+
+    private fun invalidateAiRequest(showMessage: Boolean = false) {
+        if (aiJob == null && !_state.value.aiBusy) return
+        aiGeneration++
+        aiJob?.cancel()
+        aiJob = null
+        _state.value = _state.value.copy(
+            aiBusy = false,
+            aiError = null,
+            message = if (showMessage) "已取消 AI 整理，文字已保留" else _state.value.message,
+        )
+    }
+
+    fun onAiDraftTitleChange(title: String) = updateAiDraft { it.copy(title = title) }
+    fun onAiDraftPlannedDateChange(value: String) = updateAiDraft { it.copy(plannedDate = value) }
+    fun onAiDraftDueChange(value: String) = updateAiDraft { it.copy(dueAt = value) }
+    fun onAiDraftQuadrantChange(quadrant: Quadrant) = updateAiDraft { it.copy(quadrant = quadrant) }
+    fun onAiDraftClarificationAck(checked: Boolean) = updateAiDraft {
+        it.copy(noReminderAcknowledged = checked)
+    }
+
+    private fun updateAiDraft(block: (AiDraft) -> AiDraft) {
+        if (_state.value.busy) return
+        val draft = _state.value.aiDraft ?: return
+        _state.value = _state.value.copy(aiDraft = block(draft), aiError = null)
+    }
+
+    fun onAddAiReminder(kind: AiReminderKind) = updateAiDraft {
+        it.copy(reminders = it.reminders + AiReminderDraft(kind = kind))
+    }
+
+    fun onAiReminderValueChange(index: Int, value: String) = updateAiDraft { draft ->
+        draft.copy(reminders = draft.reminders.mapIndexed { current, reminder ->
+            if (current == index) reminder.copy(value = value) else reminder
+        })
+    }
+
+    fun onRemoveAiReminder(index: Int) = updateAiDraft { draft ->
+        draft.copy(reminders = draft.reminders.filterIndexed { current, _ -> current != index })
+    }
+
+    fun onCancelAiDraft() {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(
+            aiDraft = null,
+            aiError = null,
+            message = "已取消 AI 草稿，文字已保留，可继续编辑或手动创建",
+        )
+    }
+
+    fun onConfirmAiDraft() {
+        val draft = _state.value.aiDraft ?: return
+        if (draft.requiresNoReminderAcknowledgement) {
+            _state.value = _state.value.copy(
+                aiError = "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”",
+            )
+            return
+        }
+        val edit = try {
+            draft.toTodoEdit(zoneId)
+        } catch (e: IllegalArgumentException) {
+            _state.value = _state.value.copy(aiError = e.message ?: "草稿字段无效，请检查")
+            return
+        }
+        action {
+            val result = useCases.confirmDraft(
+                title = edit.title,
+                remindAt = edit.remindAt,
+                plannedDate = edit.plannedDate,
+                dueAt = edit.dueAt,
+                reminders = edit.reminders.orEmpty(),
+                quadrant = draft.quadrant,
+                itemId = draft.itemId,
+            )
+            _state.value = _state.value.copy(
+                aiDraft = null,
+                aiError = null,
+                draftText = "",
+                draftHasTime = false,
+                draftTime = null,
+                inputError = null,
+                message = outcomeMessage(result.outcome),
+            )
+            reload()
+        }
     }
 
     fun onDelete(id: String) {
@@ -501,6 +748,8 @@ class TodoViewModel @JvmOverloads constructor(
     override fun onCleared() {
         transcriptionJob?.cancel()
         speechGeneration++
+        aiGeneration++
+        aiJob?.cancel()
         recorder.release()
         super.onCleared()
     }

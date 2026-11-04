@@ -3,6 +3,7 @@ package com.voicetodo.data
 import androidx.room.*
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoReminder
+import com.voicetodo.domain.Quadrant
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -21,11 +22,34 @@ data class TodoEntity(
     val createdAt: Instant,
     val reminderRevision: Long,
     @ColumnInfo(defaultValue = "'[]'") val reminders: List<TodoReminder> = emptyList(),
+    @ColumnInfo(defaultValue = "'NotImportantNotUrgent'")
+    val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
 ) {
-    fun item() = TodoItem(id, title, remindAt, plannedDate, dueAt, completedAt, createdAt, reminderRevision, reminders)
+    fun item() = TodoItem(
+        id = id,
+        title = title,
+        remindAt = remindAt,
+        plannedDate = plannedDate,
+        dueAt = dueAt,
+        completedAt = completedAt,
+        createdAt = createdAt,
+        reminderRevision = reminderRevision,
+        reminders = reminders,
+        quadrant = quadrant,
+    )
     companion object {
-        fun from(item: TodoItem) = TodoEntity(item.id, item.title, item.remindAt, item.plannedDate,
-            item.dueAt, item.completedAt, item.createdAt, item.reminderRevision, item.reminders)
+        fun from(item: TodoItem) = TodoEntity(
+            id = item.id,
+            title = item.title,
+            remindAt = item.remindAt,
+            plannedDate = item.plannedDate,
+            dueAt = item.dueAt,
+            completedAt = item.completedAt,
+            createdAt = item.createdAt,
+            reminderRevision = item.reminderRevision,
+            reminders = item.reminders,
+            quadrant = item.quadrant,
+        )
     }
 }
 
@@ -95,8 +119,8 @@ interface TodoDao {
     @Insert suspend fun migrated(record: StorageMigration)
 }
 
-@Database(entities = [TodoEntity::class, DeliveryEntity::class, ReminderDeliveryEntity::class, StorageMigration::class], version = 2,
-    autoMigrations = [AutoMigration(from = 1, to = 2)], exportSchema = true)
+@Database(entities = [TodoEntity::class, DeliveryEntity::class, ReminderDeliveryEntity::class, StorageMigration::class], version = 3,
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)], exportSchema = true)
 @TypeConverters(TimeConverters::class)
 abstract class TodoDatabase : RoomDatabase() {
     abstract fun todos(): TodoDao

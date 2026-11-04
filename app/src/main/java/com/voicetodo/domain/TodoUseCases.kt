@@ -2,6 +2,7 @@ package com.voicetodo.domain
 
 import java.time.Instant
 import java.time.LocalDate
+import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -198,17 +199,61 @@ class TodoUseCases(
         remindAt: Instant? = null,
         plannedDate: LocalDate? = null,
         dueAt: Instant? = null,
+        reminders: List<ReminderEdit> = emptyList(),
+        quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+        itemId: String = UUID.randomUUID().toString(),
     ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
+
+        // 同一草稿重复确认时返回已创建事项，不再保存或重复排闹钟。
+        repo.findById(itemId)?.let { existing ->
+            return@withLock ConfirmResult(existing, outcomeFor(existing))
+        }
+
+        if (reminders.isNotEmpty()) {
+            require(reminders.map { it.id }.distinct().size == reminders.size) {
+                "同一事项的提醒身份不能重复"
+            }
+            val now = clock.now()
+            val normalized = reminders.map { rule ->
+                require(rule.id.isNotBlank()) { "提醒身份不能为空" }
+                require((rule.at == null) != (rule.beforeDue == null)) {
+                    "请选择一种提醒：指定时刻或相对截止"
+                }
+                rule.beforeDue?.let { offset ->
+                    require(!offset.isNegative && !offset.isZero) { "提前时长必须大于零" }
+                }
+                val at = rule.at ?: requireNotNull(dueAt) { "相对提醒需要截止时间" }
+                    .minus(requireNotNull(rule.beforeDue))
+                require(at.isAfter(now)) { "提醒时间必须晚于当前时间" }
+                TodoReminder(rule.id, at, rule.beforeDue)
+            }
+            val item = TodoItem(
+                id = itemId,
+                title = clean,
+                remindAt = normalized.first().at,
+                plannedDate = plannedDate,
+                dueAt = dueAt,
+                createdAt = now,
+                reminders = normalized,
+                quadrant = quadrant,
+            )
+            repo.save(item)
+            val (scheduled, outcome) = scheduleMultiple(item)
+            return@withLock ConfirmResult(scheduled, outcome)
+        }
+
         remindAt?.let { require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" } }
 
         val item = TodoItem(
+            id = itemId,
             title = clean,
             remindAt = remindAt,
             plannedDate = plannedDate,
             dueAt = dueAt,
             createdAt = clock.now(),
+            quadrant = quadrant,
         )
         repo.save(item)
         // 调度失败（缺权限/系统拒绝）不抛异常、不回滚事项，但如实返回 NotReady。
@@ -220,6 +265,14 @@ class TodoUseCases(
             ReminderOutcome.NotReady
         }
         ConfirmResult(item, outcome)
+    }
+
+    private fun outcomeFor(item: TodoItem): ReminderOutcome = when {
+        item.reminders.isEmpty() ->
+            if (item.remindAt == null) ReminderOutcome.NotRequested else ReminderOutcome.Scheduled
+        item.reminders.any { it.outcome == ReminderOutcome.NotReady && it.deliveredAt == null } ->
+            ReminderOutcome.NotReady
+        else -> ReminderOutcome.Scheduled
     }
 
     /** 用户取消确认：不创建事项、不调度。 */

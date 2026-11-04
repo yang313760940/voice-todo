@@ -2,6 +2,7 @@ package com.voicetodo.data
 
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoRepository
+import com.voicetodo.domain.Quadrant
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -46,6 +47,9 @@ class FileTodoRepository(
                     } else {
                         0L
                     },
+                    quadrant = o.optionalString("quadrant")?.let {
+                        runCatching { Quadrant.valueOf(it) }.getOrDefault(Quadrant.NotImportantNotUrgent)
+                    } ?: Quadrant.NotImportantNotUrgent,
                 )
             }
             list
@@ -74,6 +78,7 @@ class FileTodoRepository(
                     it.completedAt?.let { at -> put("completedAt", at.toString()) }
                     put("createdAt", it.createdAt.toString())
                     put("reminderRevision", it.reminderRevision)
+                    put("quadrant", it.quadrant.name)
                 }
             )
         }

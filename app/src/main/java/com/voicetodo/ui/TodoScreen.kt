@@ -26,7 +26,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private val timeFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+internal val timeFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
 @Composable
 fun TodoScreen(vm: TodoViewModel) {
@@ -35,8 +35,24 @@ fun TodoScreen(vm: TodoViewModel) {
         vm.onRefresh()
         onPauseOrDispose { }
     }
-    BackHandler(enabled = state.detail != null) { vm.onCancelDetail() }
-    val enabled = !state.loading && !state.busy && state.storageError == null
+    val modalOpen = state.aiSettingsForm != null || state.aiDraft != null || state.detail != null
+    BackHandler(enabled = modalOpen) {
+        when {
+            state.aiSettingsForm != null -> vm.onCloseAiSettings()
+            state.aiDraft != null -> vm.onCancelAiDraft()
+            else -> vm.onCancelDetail()
+        }
+    }
+    val baseEnabled = !state.loading && !state.busy && state.storageError == null
+    val enabled = baseEnabled && !state.aiBusy
+    state.aiSettingsForm?.let {
+        AiSettingsScreen(vm, state, it)
+        return
+    }
+    state.aiDraft?.let {
+        AiDraftScreen(vm, state, it, enabled)
+        return
+    }
     val detail = state.detail
     if (detail != null) {
         DetailScreen(vm, state, detail, enabled)
@@ -84,6 +100,50 @@ fun TodoScreen(vm: TodoViewModel) {
             OutlinedTextField(value = state.draftText, onValueChange = vm::onDraftTextChange,
                 label = { Text("识别文字 / 标题（可编辑）") }, enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("title_field"))
+        }
+        item {
+            Card(Modifier.fillMaxWidth().testTag("ai_card")) {
+                Column(Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("在线 AI 整理（可选）", fontWeight = FontWeight.Medium)
+                    Text(
+                        "语音识别始终在本机离线完成。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
+                            "不发送录音、历史事项或其他待办。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        if (state.aiConfigured) "AI：已配置（密钥加密保存）" else "AI：未配置",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("ai_config_status"),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = vm::onOrganizeWithAi,
+                            enabled = enabled && (state.draftText.isNotBlank() || !state.aiConfigured),
+                            modifier = Modifier.testTag("ai_organize_button"),
+                        ) {
+                            Text(if (state.aiConfigured) "用在线 AI 整理" else "配置 AI 服务")
+                        }
+                        TextButton(onClick = vm::onOpenAiSettings, enabled = baseEnabled,
+                            modifier = Modifier.testTag("ai_settings_button")) {
+                            Text("高级设置")
+                        }
+                    }
+                    if (state.aiBusy) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text("AI 整理中…", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = vm::onCancelAiRequest, enabled = baseEnabled,
+                            modifier = Modifier.testTag("cancel_ai_request")) {
+                            Text("取消 AI 请求（保留文字）")
+                        }
+                    }
+                    state.aiError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("ai_error"))
+                    }
+                }
+            }
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -262,15 +322,20 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
 }
 
 @Composable
-private fun DateField(label: String, format: String, value: String, tag: String, enabled: Boolean,
-    onChange: (String) -> Unit, onPick: () -> Unit) {
+internal fun DateField(label: String, format: String, value: String, tag: String, enabled: Boolean,
+    onChange: (String) -> Unit, onPick: () -> Unit, tagPrefix: String = "detail") {
+    val fieldTag = if (tagPrefix == "detail") "detail_${tag}_field" else "${tagPrefix}_${tag}_field"
+    val pickTag = if (tagPrefix == "detail") "pick_$tag" else "${tagPrefix}_pick_$tag"
+    val clearTag = if (tagPrefix == "detail") "clear_$tag" else "${tagPrefix}_clear_$tag"
     Column {
         OutlinedTextField(value = value, onValueChange = onChange, enabled = enabled, singleLine = true,
             label = { Text(label) }, placeholder = { Text(format) },
-            modifier = Modifier.fillMaxWidth().testTag("detail_${tag}_field"))
+            modifier = Modifier.fillMaxWidth().testTag(fieldTag))
         Row {
-            TextButton(onClick = onPick, enabled = enabled, modifier = Modifier.testTag("pick_$tag")) { Text("选择$label") }
-            TextButton(onClick = { onChange("") }, enabled = enabled, modifier = Modifier.testTag("clear_$tag")) { Text("清除$label") }
+            TextButton(onClick = onPick, enabled = enabled,
+                modifier = Modifier.testTag(pickTag)) { Text("选择$label") }
+            TextButton(onClick = { onChange("") }, enabled = enabled,
+                modifier = Modifier.testTag(clearTag)) { Text("清除$label") }
         }
     }
 }
@@ -336,11 +401,11 @@ private fun StorageStatus(state: UiState, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun Message(message: String?) {
+internal fun Message(message: String?) {
     message?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("message")) }
 }
 
 @Composable
-private fun InputError(message: String?) {
+internal fun InputError(message: String?) {
     message?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("input_error")) }
 }

@@ -1,6 +1,5 @@
 package com.voicetodo.alarm
 
-import android.app.Notification
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -11,9 +10,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import androidx.core.app.NotificationCompat
-import com.voicetodo.MainActivity
-import com.voicetodo.VoiceTodoApp
 
 /**
  * 持续响铃前台服务：循环播放本地提示音；默认 60 秒后停止发声并保留通知。
@@ -31,7 +27,7 @@ class RingingService : Service() {
         val itemId = intent?.getStringExtra(SystemReminderScheduler.EXTRA_ITEM_ID) ?: "unknown"
         val title = intent?.getStringExtra(SystemReminderScheduler.EXTRA_TITLE) ?: "提醒"
 
-        val notification = buildNotification(itemId, title)
+        val notification = AlarmNotification.build(this, itemId, title)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(AlarmReceiver.notificationIdFor(itemId), notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -80,21 +76,6 @@ class RingingService : Service() {
         }
         // 停止前台态，通知保留（AlarmReceiver 已单独发通知）
         stopForeground(STOP_FOREGROUND_DETACH)
-    }
-
-    private fun buildNotification(itemId: String, title: String): Notification {
-        val openPi = android.app.PendingIntent.getActivity(
-            this, itemId.hashCode(), Intent(this, MainActivity::class.java),
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, VoiceTodoApp.CHANNEL_REMINDER)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("语音提醒")
-            .setContentText(title)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setOngoing(true)
-            .setContentIntent(openPi)
-            .build()
     }
 
     override fun onDestroy() {

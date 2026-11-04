@@ -11,6 +11,8 @@
     <!-- 持续响铃前台服务（mediaPlayback） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 锁屏/息屏下用 full-screen intent 点亮屏幕并拉起全屏提醒（API 29+/target 29+ 需声明） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- 重启后恢复未来闹钟 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

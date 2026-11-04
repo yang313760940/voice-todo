@@ -18,6 +18,8 @@ interface TodoRepository {
     suspend fun completed(): List<TodoItem> = all().filter { it.completedAt != null }
         .sortedWith(compareByDescending<TodoItem> { it.completedAt }.thenBy { it.id })
     suspend fun deliveredAt(itemId: String, revision: Long): Instant? = null
+    suspend fun deliveredAt(itemId: String, reminderId: String, revision: Long): Instant? =
+        if (reminderId == itemId) deliveredAt(itemId, revision) else null
 
     /** Atomically validate, publish once, then record success. A failed publish remains retryable. */
     suspend fun deliverReminder(
@@ -27,4 +29,9 @@ interface TodoRepository {
         now: () -> Instant,
         publish: suspend (TodoItem) -> Boolean,
     ): Boolean = false
+
+    suspend fun deliverReminder(
+        itemId: String, reminderId: String, revision: Long, atMillis: Long, now: () -> Instant,
+        publish: suspend (TodoItem) -> Boolean,
+    ): Boolean = if (reminderId == itemId) deliverReminder(itemId, revision, atMillis, now, publish) else false
 }

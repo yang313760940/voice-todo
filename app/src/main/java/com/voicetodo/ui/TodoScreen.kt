@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.isOverdue
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -105,14 +106,14 @@ fun TodoScreen(vm: TodoViewModel) {
         itemsIndexed(state.items, key = { _, item -> "pending-${item.id}" }) { index, item ->
             ItemRow(item, state, vm.zoneId, "item_row_$index", enabled,
                 onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onComplete(item.id) },
-                onDelete = { vm.onDelete(item.id) })
+                onDelete = { vm.onDelete(item.id) }, onRetry = { vm.onRetryReminders(item.id) })
         }
         item { HorizontalDivider(); Text("已完成", style = MaterialTheme.typography.titleMedium) }
         if (state.completedItems.isEmpty()) item { Text("暂无已完成事项", style = MaterialTheme.typography.bodySmall) }
         itemsIndexed(state.completedItems, key = { _, item -> "completed-${item.id}" }) { index, item ->
             ItemRow(item, state, vm.zoneId, "completed_row_$index", enabled,
                 onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onRestore(item.id) },
-                onDelete = { vm.onDelete(item.id) })
+                onDelete = { vm.onDelete(item.id) }, onRetry = { })
         }
     }
 }
@@ -154,11 +155,57 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
                 onChange = { vm.onDetailValueChange(DetailField.Due, it) },
                 onPick = { pick(DetailField.Due, detail.dueAt) })
         }
+        item { Text("提醒安排", style = MaterialTheme.typography.titleMedium) }
+        itemsIndexed(detail.reminders, key = { _, reminder -> reminder.id }) { index, reminder ->
+            Card(Modifier.fillMaxWidth().testTag("detail_reminder_$index")) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    Text(if (reminder.kind == ReminderDraftKind.Specified) "指定提醒 ${index + 1}"
+                        else "相对提醒 ${index + 1}", fontWeight = FontWeight.Medium)
+                    if (reminder.kind == ReminderDraftKind.Specified) {
+                        OutlinedTextField(reminder.value, { vm.onReminderValueChange(index, it) },
+                            enabled = editable, singleLine = true, label = { Text("提醒时间") },
+                            placeholder = { Text("yyyy-MM-dd HH:mm") },
+                            modifier = Modifier.fillMaxWidth().testTag("detail_reminder_value_$index"))
+                        Row {
+                            TextButton(onClick = {
+                                val text = reminder.value
+                                val initial = runCatching { LocalDate.parse(text.take(10)) }
+                                    .getOrElse { state.now.atZone(vm.zoneId).toLocalDate() }
+                                DatePickerDialog(context, { _, year, month, day ->
+                                    val date = LocalDate.of(year, month + 1, day)
+                                    val time = runCatching { LocalDateTime.parse(text.replace(' ', 'T')).toLocalTime() }
+                                        .getOrElse { LocalTime.of(9, 0) }
+                                    TimePickerDialog(context, { _, hour, minute ->
+                                        vm.onReminderValueChange(index, LocalDateTime.of(date,
+                                            LocalTime.of(hour, minute)).format(timeFmt))
+                                    }, time.hour, time.minute, true).show()
+                                }, initial.year, initial.monthValue - 1, initial.dayOfMonth).show()
+                            }, enabled = editable, modifier = Modifier.testTag("pick_reminder_$index")) {
+                                Text("选择提醒时间")
+                            }
+                            TextButton(onClick = { vm.onReminderValueChange(index, "") }, enabled = editable,
+                                modifier = Modifier.testTag(if (index == 0) "clear_remindAt" else "clear_reminder_$index")) {
+                                Text("清除提醒时间")
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(reminder.value, { vm.onReminderValueChange(index, it.filter(Char::isDigit)) },
+                            enabled = editable, singleLine = true, label = { Text("截止前多少分钟") },
+                            modifier = Modifier.fillMaxWidth().testTag("detail_reminder_value_$index"))
+                    }
+                    TextButton(onClick = { vm.onRemoveReminder(index) }, enabled = editable,
+                        modifier = Modifier.testTag("remove_reminder_$index")) { Text("删除此提醒") }
+                }
+            }
+        }
         item {
-            DateField("提醒时间", "yyyy-MM-dd HH:mm", detail.remindAt, "remindAt", editable,
-                onChange = { vm.onDetailValueChange(DetailField.Reminder, it) },
-                onPick = { pick(DetailField.Reminder, detail.remindAt) })
-            Text("计划日期和截止时间不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Specified) }, enabled = editable,
+                    modifier = Modifier.testTag("add_specified_reminder")) { Text("新增指定提醒") }
+                OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Relative) }, enabled = editable,
+                    modifier = Modifier.testTag("add_relative_reminder")) { Text("新增相对提醒") }
+            }
+            Text("相对提醒按截止时间提前；计划日期不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
                 style = MaterialTheme.typography.bodySmall)
         }
         item { ItemStatus(detail.original, state); Message(state.message) }
@@ -195,14 +242,26 @@ private fun DateField(label: String, format: String, value: String, tag: String,
 
 @Composable
 private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, enabled: Boolean,
-    onOpen: () -> Unit, onAction: () -> Unit, onDelete: () -> Unit) {
+    onOpen: () -> Unit, onAction: () -> Unit, onDelete: () -> Unit, onRetry: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().testTag(tag).clickable(enabled = enabled, onClick = onOpen)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(item.title, fontWeight = FontWeight.Medium)
             item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
             item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
-            Text(item.remindAt?.let { "提醒：${it.atZone(zone).format(timeFmt)}" } ?: "无提醒",
-                style = MaterialTheme.typography.bodySmall)
+            if (item.reminders.isEmpty()) {
+                Text(item.remindAt?.let { "提醒：${it.atZone(zone).format(timeFmt)}" } ?: "无提醒",
+                    style = MaterialTheme.typography.bodySmall)
+            } else item.reminders.forEachIndexed { index, reminder ->
+                val rule = reminder.beforeDue?.let { "截止前 ${it.toMinutes()} 分钟" } ?: "指定"
+                val status = when {
+                    reminder.deliveredAt != null -> "已提醒"
+                    reminder.outcome == ReminderOutcome.Scheduled -> "已安排"
+                    reminder.outcome == ReminderOutcome.NotReady -> "未就绪"
+                    else -> "未安排"
+                }
+                Text("提醒 ${index + 1}：$rule · ${reminder.at.atZone(zone).format(timeFmt)} · $status",
+                    style = MaterialTheme.typography.bodySmall)
+            }
             ItemStatus(item, state)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onOpen, enabled = enabled, modifier = Modifier.testTag("open_${item.id}")) { Text("详情") }
@@ -211,6 +270,10 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
                     Text(if (item.completedAt == null) "完成" else "恢复")
                 }
                 TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
+                if (item.completedAt == null && item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
+                    TextButton(onClick = onRetry, enabled = enabled,
+                        modifier = Modifier.testTag("retry_reminders_${item.id}")) { Text("重试提醒") }
+                }
             }
         }
     }

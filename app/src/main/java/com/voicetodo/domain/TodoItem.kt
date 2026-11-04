@@ -25,6 +25,8 @@ data class TodoItem(
     val createdAt: Instant,
     /** 提醒修订号；每次完成或恢复都会推进，使旧系统闹钟失效。 */
     val reminderRevision: Long = 0,
+    /** 多提醒详情的完整安排；旧的单提醒字段保留用于兼容原有入口。 */
+    val reminders: List<TodoReminder> = emptyList(),
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */
@@ -36,8 +38,15 @@ fun TodoItem.isCurrentReminder(
     itemId: String,
     revision: Long,
     atMillis: Long,
-): Boolean =
-    id == itemId &&
-        completedAt == null &&
-        reminderRevision == revision &&
-        remindAt?.toEpochMilli() == atMillis
+): Boolean = isCurrentReminder(itemId, itemId, revision, atMillis)
+
+fun TodoItem.findReminder(reminderId: String): TodoReminder? =
+    if (reminders.isNotEmpty()) reminders.firstOrNull { it.id == reminderId }
+    else if (reminderId == id) remindAt?.let { TodoReminder(id, it, revision = reminderRevision) }
+    else null
+
+fun TodoItem.isCurrentReminder(itemId: String, reminderId: String, revision: Long, atMillis: Long): Boolean {
+    val reminder = findReminder(reminderId) ?: return false
+    return id == itemId && completedAt == null && reminder.revision == revision &&
+        reminder.at.toEpochMilli() == atMillis
+}

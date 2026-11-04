@@ -33,6 +33,7 @@ import java.time.LocalDate
 import java.io.File
 import androidx.compose.ui.semantics.SemanticsProperties
 import java.time.Instant
+import java.time.Duration
 import java.time.ZoneId
 
 @RunWith(RobolectricTestRunner::class)
@@ -126,7 +127,7 @@ class TodoScreenTest {
         replaceDetail("detail_title_field", " Edited ")
         replaceDetail("detail_plannedDate_field", "2026-11-05")
         replaceDetail("detail_dueAt_field", "2026-11-06 20:30")
-        replaceDetail("detail_remindAt_field", "2026-11-05 18:15")
+        replaceDetail("detail_reminder_value_0", "2026-11-05 18:15")
         saveDetail()
         val saved = runBlocking { repo.findById(item.id)!! }
         Assert.assertEquals("Edited", saved.title)
@@ -139,7 +140,7 @@ class TodoScreenTest {
         assertFieldText("detail_title_field", "Edited")
         assertFieldText("detail_plannedDate_field", "2026-11-05")
         assertFieldText("detail_dueAt_field", "2026-11-06 20:30")
-        assertFieldText("detail_remindAt_field", "2026-11-05 18:15")
+        assertFieldText("detail_reminder_value_0", "2026-11-05 18:15")
     }
 
     @Test fun cancelDiscardsEditsAndInvalidInputCannotPartiallySave() {
@@ -162,12 +163,12 @@ class TodoScreenTest {
     @Test fun completingAndRestoringFutureReminderMovesBetweenExplicitLists() {
         val item = createUntimed()
         open(item)
-        replaceDetail("detail_remindAt_field", "2026-11-05 18:15")
+        replaceDetail("detail_reminder_value_0", "2026-11-05 18:15")
         saveDetail()
         open(item)
         detailClick("detail_complete_button")
         waitFor { vm.state.value.items.isEmpty() && vm.state.value.completedItems.size == 1 && !vm.state.value.busy }
-        Assert.assertEquals(listOf(item.id, item.id), scheduler.cancelled)
+        Assert.assertEquals(listOf(item.id), scheduler.cancelled)
         open(item, completed = true)
         compose.onNodeWithTag("detail_title_field").assertIsNotEnabled()
         detailClick("detail_restore_button")
@@ -180,7 +181,7 @@ class TodoScreenTest {
     @Test fun expiredRestoreClearsReminderAndDoesNotRepeatWarningAfterReopening() {
         val item = createUntimed()
         open(item)
-        replaceDetail("detail_remindAt_field", "2026-11-04 17:01")
+        replaceDetail("detail_reminder_value_0", "2026-11-04 17:01")
         saveDetail()
         open(item)
         detailClick("detail_complete_button")
@@ -196,7 +197,7 @@ class TodoScreenTest {
         waitFor { !vm.state.value.loading }
         Assert.assertNull(vm.state.value.message)
         open(item)
-        assertFieldText("detail_remindAt_field", "")
+        assertFieldText("detail_reminder_value_0", "")
     }
 
     @Test fun deliveredAndOverdueAreIndependentAndOldRevisionBadgeDisappears() {
@@ -214,7 +215,7 @@ class TodoScreenTest {
         compose.onNodeWithTag("overdue_${item.id}", useUnmergedTree = true).assertTextEquals("逾期")
         open(item)
         detailClick("clear_dueAt")
-        replaceDetail("detail_remindAt_field", "2026-11-05 18:15")
+        replaceDetail("detail_reminder_value_0", "2026-11-05 18:15")
         saveDetail()
         Assert.assertTrue(vm.state.value.deliveredIds.isEmpty())
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
@@ -261,7 +262,7 @@ class TodoScreenTest {
         }
         pickDate("plannedDate", 5, false)
         pickDate("dueAt", 6, true)
-        pickDate("remindAt", 7, true)
+        pickDate("reminder_0", 7, true)
         saveDetail()
         var saved = runBlocking { repo.findById(item.id)!! }
         Assert.assertEquals(LocalDate.of(2026, 11, 5), saved.plannedDate)
@@ -340,6 +341,46 @@ class TodoScreenTest {
         Assert.assertEquals("Recovered", vm.state.value.items.single().title)
         Assert.assertEquals(original, file.readText())
         compose.onNodeWithTag("save_button").assertIsEnabled()
+    }
+
+    @Test fun detailEditsMultipleReminderRulesAndRepairsNotReadySchedules() {
+        val item = createUntimed("Multiple reminders")
+        scheduler.scheduleSucceeds = false
+        open(item)
+        replaceDetail("detail_dueAt_field", "2026-11-05 20:00")
+        replaceDetail("detail_reminder_value_0", "2026-11-05 18:00")
+        detailClick("add_specified_reminder")
+        replaceDetail("detail_reminder_value_1", "2026-11-05 19:00")
+        detailClick("add_relative_reminder")
+        replaceDetail("detail_reminder_value_2", "60")
+        saveDetail()
+
+        val saved = runBlocking { repo.findById(item.id)!! }
+        Assert.assertEquals(3, saved.reminders.size)
+        Assert.assertEquals(
+            listOf(
+                Instant.parse("2026-11-05T10:00:00Z") to null,
+                Instant.parse("2026-11-05T11:00:00Z") to null,
+                Instant.parse("2026-11-05T11:00:00Z") to Duration.ofMinutes(60),
+            ),
+            saved.reminders.map { it.at to it.beforeDue },
+        )
+        Assert.assertTrue(saved.reminders.all { it.outcome == ReminderOutcome.NotReady })
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("retry_reminders_${item.id}"))
+        compose.onNodeWithTag("retry_reminders_${item.id}").assertIsDisplayed()
+
+        scheduler.scheduleSucceeds = true
+        compose.onNodeWithTag("retry_reminders_${item.id}").performClick()
+        waitFor { vm.state.value.items.single().reminders.all { it.outcome == ReminderOutcome.Scheduled } }
+        compose.onNodeWithTag("message").assertTextEquals("已保存并安排提醒")
+
+        open(item)
+        detailClick("remove_reminder_1")
+        saveDetail()
+        val reduced = runBlocking { repo.findById(item.id)!! }
+        Assert.assertEquals(2, reduced.reminders.size)
+        Assert.assertEquals(1, scheduler.cancelled.count { it == item.id })
+        Assert.assertEquals(2, scheduler.pending.size)
     }
 
     private fun waitFor(condition: () -> Boolean) {

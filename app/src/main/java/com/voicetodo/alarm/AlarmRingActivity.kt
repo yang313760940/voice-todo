@@ -16,6 +16,7 @@ class AlarmRingActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val itemId = intent.getStringExtra(SystemReminderScheduler.EXTRA_ITEM_ID) ?: "unknown"
+        val reminderId = intent.getStringExtra(SystemReminderScheduler.EXTRA_REMINDER_ID) ?: itemId
         val title = intent.getStringExtra(SystemReminderScheduler.EXTRA_TITLE) ?: "提醒"
 
         val padding = (24 * resources.displayMetrics.density).toInt()
@@ -38,12 +39,13 @@ class AlarmRingActivity : Activity() {
                 val stop = android.content.Intent(this@AlarmRingActivity, AlarmActionReceiver::class.java).apply {
                     action = AlarmActionReceiver.ACTION_STOP
                     putExtra(SystemReminderScheduler.EXTRA_ITEM_ID, itemId)
+                    putExtra(SystemReminderScheduler.EXTRA_REMINDER_ID, reminderId)
                 }
                 sendBroadcast(stop)
                 // 兜底：直接停止服务与通知
                 stopService(android.content.Intent(this@AlarmRingActivity, RingingService::class.java))
                 getSystemService(NotificationManager::class.java)
-                    .cancel(AlarmReceiver.notificationIdFor(itemId))
+                    .cancel(AlarmReceiver.notificationIdFor(itemId, reminderId))
                 finish()
             }
         }

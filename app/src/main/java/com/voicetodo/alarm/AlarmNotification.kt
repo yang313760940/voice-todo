@@ -10,21 +10,25 @@ import com.voicetodo.VoiceTodoApp
 
 /** 前台服务和服务启动失败时使用同一份可关闭的闹钟通知。 */
 internal object AlarmNotification {
-    fun build(context: Context, itemId: String, title: String): Notification {
-        val base = SystemReminderScheduler.requestCodeFor(itemId)
+    fun build(context: Context, itemId: String, title: String, reminderId: String = itemId): Notification {
+        val base = SystemReminderScheduler.requestCodeFor(itemId, reminderId)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val ringIntent = Intent(context, AlarmRingActivity::class.java).apply {
             // data 参与 PendingIntent 身份比较；extras 不参与，不能只依赖 hashCode。
-            data = Uri.Builder().scheme("voicetodo").authority("ring").appendPath(itemId).build()
+            data = Uri.Builder().scheme("voicetodo").authority("ring").appendPath(itemId)
+                .appendPath(reminderId).build()
             putExtra(SystemReminderScheduler.EXTRA_ITEM_ID, itemId)
+            putExtra(SystemReminderScheduler.EXTRA_REMINDER_ID, reminderId)
             putExtra(SystemReminderScheduler.EXTRA_TITLE, title)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val ringPi = PendingIntent.getActivity(context, base + 0x040000, ringIntent, flags)
         val stopIntent = Intent(context, AlarmActionReceiver::class.java).apply {
             action = AlarmActionReceiver.ACTION_STOP
-            data = Uri.Builder().scheme("voicetodo").authority("stop").appendPath(itemId).build()
+            data = Uri.Builder().scheme("voicetodo").authority("stop").appendPath(itemId)
+                .appendPath(reminderId).build()
             putExtra(SystemReminderScheduler.EXTRA_ITEM_ID, itemId)
+            putExtra(SystemReminderScheduler.EXTRA_REMINDER_ID, reminderId)
         }
         val stopPi = PendingIntent.getBroadcast(context, base + 0x080000, stopIntent, flags)
         return NotificationCompat.Builder(context, VoiceTodoApp.CHANNEL_REMINDER)

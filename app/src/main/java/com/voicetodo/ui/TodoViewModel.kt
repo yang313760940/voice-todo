@@ -9,6 +9,7 @@ import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.domain.TodoEdit
 import com.voicetodo.domain.ReminderOutcome
+import com.voicetodo.domain.ReminderEdit
 import com.voicetodo.domain.Clock
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.data.RoomTodoRepository
@@ -29,16 +30,26 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Instant
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
+import java.util.UUID
 
 /** 录音状态机。 */
 enum class RecordState { Idle, Recording, Transcribing }
 
 enum class DetailField { Plan, Due, Reminder }
+
+enum class ReminderDraftKind { Specified, Relative }
+
+data class ReminderDraft(
+    val id: String = UUID.randomUUID().toString(),
+    val kind: ReminderDraftKind,
+    val value: String = "",
+)
 
 data class DetailDraft(
     val original: TodoItem,
@@ -46,6 +57,7 @@ data class DetailDraft(
     val plannedDate: String,
     val dueAt: String,
     val remindAt: String,
+    val reminders: List<ReminderDraft>,
 ) {
     fun edit(zone: ZoneId): TodoEdit {
         fun parseTime(text: String, originalTime: Instant?): Instant? {
@@ -54,16 +66,34 @@ data class DetailDraft(
                 ?.let { LocalDateTime.parse(it.replace(' ', 'T')).atZone(zone).toInstant() }
         }
         try {
+            val due = parseTime(dueAt, original.dueAt)
+            val reminderEdits = reminders.mapNotNull { reminder ->
+                val value = reminder.value.trim()
+                if (value.isEmpty()) return@mapNotNull null
+                when (reminder.kind) {
+                    ReminderDraftKind.Specified -> ReminderEdit(reminder.id,
+                        at = LocalDateTime.parse(value.replace(' ', 'T')).atZone(zone).toInstant())
+                    ReminderDraftKind.Relative -> ReminderEdit(reminder.id,
+                        beforeDue = Duration.ofMinutes(value.toLongOrNull()
+                            ?: throw IllegalArgumentException("相对提醒请输入整数分钟")))
+                }
+            }
             return TodoEdit(title, plannedDate.trim().takeIf { it.isNotEmpty() }?.let(LocalDate::parse),
-                parseTime(dueAt, original.dueAt), parseTime(remindAt, original.remindAt))
+                due, reminderEdits.firstOrNull()?.at, reminderEdits)
         } catch (e: DateTimeParseException) {
             throw IllegalArgumentException("日期格式：yyyy-MM-dd；时间格式：yyyy-MM-dd HH:mm", e)
         }
     }
 
     companion object {
-        fun from(item: TodoItem, zone: ZoneId) = DetailDraft(item, item.title,
-            item.plannedDate?.toString().orEmpty(), timeText(item.dueAt, zone), timeText(item.remindAt, zone))
+        fun from(item: TodoItem, zone: ZoneId): DetailDraft {
+            val rules = if (item.reminders.isNotEmpty()) item.reminders.map {
+                if (it.beforeDue == null) ReminderDraft(it.id, ReminderDraftKind.Specified, timeText(it.at, zone))
+                else ReminderDraft(it.id, ReminderDraftKind.Relative, it.beforeDue.toMinutes().toString())
+            } else listOf(ReminderDraft(item.id, ReminderDraftKind.Specified, timeText(item.remindAt, zone)))
+            return DetailDraft(item, item.title, item.plannedDate?.toString().orEmpty(),
+                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules)
+        }
         fun timeText(at: Instant?, zone: ZoneId): String =
             at?.atZone(zone)?.toLocalDateTime()?.toString()?.replace('T', ' ').orEmpty()
     }
@@ -270,8 +300,33 @@ class TodoViewModel @JvmOverloads constructor(
         _state.value = _state.value.copy(detail = when (field) {
             DetailField.Plan -> detail.copy(plannedDate = value)
             DetailField.Due -> detail.copy(dueAt = value)
-            DetailField.Reminder -> detail.copy(remindAt = value)
+            DetailField.Reminder -> detail.copy(remindAt = value,
+                reminders = detail.reminders.mapIndexed { index, reminder ->
+                    if (index == 0) reminder.copy(kind = ReminderDraftKind.Specified, value = value) else reminder
+                })
         })
+    }
+
+    fun onAddReminder(kind: ReminderDraftKind) {
+        val detail = _state.value.detail ?: return
+        if (!_state.value.busy) _state.value = _state.value.copy(
+            detail = detail.copy(reminders = detail.reminders + ReminderDraft(kind = kind)))
+    }
+
+    fun onReminderValueChange(index: Int, value: String) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || index !in detail.reminders.indices) return
+        _state.value = _state.value.copy(detail = detail.copy(
+            reminders = detail.reminders.mapIndexed { current, reminder ->
+                if (current == index) reminder.copy(value = value) else reminder
+            }))
+    }
+
+    fun onRemoveReminder(index: Int) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || index !in detail.reminders.indices) return
+        _state.value = _state.value.copy(detail = detail.copy(
+            reminders = detail.reminders.filterIndexed { current, _ -> current != index }))
     }
 
     fun onCancelDetail() {
@@ -299,6 +354,12 @@ class TodoViewModel @JvmOverloads constructor(
         _state.value = _state.value.copy(detail = null, message = if (result.pastReminderCleared) {
             "旧提醒已过期，已清除；请重新安排提醒"
         } else "事项已恢复。${outcomeMessage(result.outcome)}")
+        reload()
+    }
+
+    fun onRetryReminders(id: String) = action {
+        val result = useCases.retryReminders(id)
+        _state.value = _state.value.copy(message = outcomeMessage(result.outcome))
         reload()
     }
 

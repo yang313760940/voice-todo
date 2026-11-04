@@ -12,6 +12,14 @@ interface ReminderScheduler {
     /** 为某事项在某时刻安排一次性系统闹钟；成功排入返回 true。 */
     fun schedule(itemId: String, title: String, at: Instant, revision: Long): Boolean
 
+    /** 独立安排一个提醒；旧适配器只能支持原事项身份，不能假报多提醒成功。 */
+    fun scheduleReminder(itemId: String, title: String, reminderId: String, at: Instant, revision: Long): Boolean =
+        reminderId == itemId && schedule(itemId, title, at, revision)
+
     /** 取消某事项的全部未来闹钟。 */
     fun cancel(itemId: String)
+
+    fun cancelReminder(itemId: String, reminderId: String) {
+        if (reminderId == itemId) cancel(itemId)
+    }
 }

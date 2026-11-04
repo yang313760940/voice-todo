@@ -40,8 +40,8 @@ class AlarmReceiver : BroadcastReceiver() {
         val itemId = token.itemId
         val repo = (context.applicationContext as VoiceTodoApp).repository
         val item = repo.findById(itemId)
-        if (item == null || !item.isCurrentReminder(itemId, token.revision, token.atMillis) ||
-            repo.deliveredAt(itemId, token.revision) != null) {
+        if (item == null || !item.isCurrentReminder(itemId, token.reminderId, token.revision, token.atMillis) ||
+            repo.deliveredAt(itemId, token.reminderId, token.revision) != null) {
             android.util.Log.w(
                 TAG,
                 "忽略过期或已投递提醒 item=$itemId revision=${token.revision}",
@@ -56,8 +56,8 @@ class AlarmReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             // 后台启动 FGS 受限：记录而非静默吞掉，便于诊断。
             android.util.Log.w(TAG, "startForegroundService 失败（后台受限/无权限）", e)
-            repo.deliverReminder(itemId, token.revision, token.atMillis, Instant::now) {
-                showFallbackNotification(context, it)
+            repo.deliverReminder(itemId, token.reminderId, token.revision, token.atMillis, Instant::now) {
+                showFallbackNotification(context, it, token.reminderId)
             }
         }
     }
@@ -68,9 +68,17 @@ class AlarmReceiver : BroadcastReceiver() {
         fun notificationIdFor(itemId: String): Int =
             SystemReminderScheduler.requestCodeFor(itemId) and 0x0FFFFFFF
 
-        internal fun showFallbackNotification(context: Context, item: TodoItem): Boolean = try {
+        fun notificationIdFor(itemId: String, reminderId: String): Int =
+            SystemReminderScheduler.requestCodeFor(itemId, reminderId) and 0x0FFFFFFF
+
+        internal fun showFallbackNotification(
+            context: Context,
+            item: TodoItem,
+            reminderId: String = item.id,
+        ): Boolean = try {
             context.getSystemService(NotificationManager::class.java).notify(
-                notificationIdFor(item.id), AlarmNotification.build(context, item.id, item.title))
+                notificationIdFor(item.id, reminderId),
+                AlarmNotification.build(context, item.id, item.title, reminderId))
             true
         } catch (e: Exception) {
             android.util.Log.w(TAG, "提醒通知不可用", e)

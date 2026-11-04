@@ -61,19 +61,34 @@ class RoomTodoRepository(
     override suspend fun delete(id: String) = ready {
         db.withTransaction { dao.deleteDeliveries(id); dao.delete(id) }
     }
-    override suspend fun deliveredAt(itemId: String, revision: Long) = ready { dao.deliveredAt(itemId, revision) }
+    private suspend fun deliveryTime(itemId: String, reminderId: String, revision: Long): Instant? =
+        dao.reminderDeliveredAt(itemId, reminderId, revision) ?:
+            if (reminderId == itemId) dao.deliveredAt(itemId, revision) else null
+
+    override suspend fun deliveredAt(itemId: String, revision: Long) = ready { deliveryTime(itemId, itemId, revision) }
+    override suspend fun deliveredAt(itemId: String, reminderId: String, revision: Long) =
+        ready { deliveryTime(itemId, reminderId, revision) }
 
     override suspend fun deliverReminder(
         itemId: String, revision: Long, atMillis: Long, now: () -> Instant,
+        publish: suspend (TodoItem) -> Boolean,
+    ): Boolean = deliverReminder(itemId, itemId, revision, atMillis, now, publish)
+
+    override suspend fun deliverReminder(
+        itemId: String, reminderId: String, revision: Long, atMillis: Long, now: () -> Instant,
         publish: suspend (TodoItem) -> Boolean,
     ): Boolean = ready {
         // The transaction serializes edits/completion against the final validation and success record.
         db.withTransaction {
             val item = dao.find(itemId)?.item() ?: return@withTransaction false
-            if (!item.isCurrentReminder(itemId, revision, atMillis) ||
-                dao.deliveredAt(itemId, revision) != null) return@withTransaction false
+            if (!item.isCurrentReminder(itemId, reminderId, revision, atMillis) ||
+                deliveryTime(itemId, reminderId, revision) != null) return@withTransaction false
             if (!publish(item)) return@withTransaction false
-            dao.delivered(DeliveryEntity(itemId, revision, now()))
+            val deliveredAt = now()
+            dao.delivered(ReminderDeliveryEntity(itemId, reminderId, revision, deliveredAt))
+            if (item.reminders.isNotEmpty()) dao.save(TodoEntity.from(item.copy(reminders = item.reminders.map {
+                if (it.id == reminderId) it.copy(deliveredAt = deliveredAt) else it
+            })))
             true
         }
     }

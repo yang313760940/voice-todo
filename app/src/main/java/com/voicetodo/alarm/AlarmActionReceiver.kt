@@ -10,10 +10,11 @@ class AlarmActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_STOP) return
         val itemId = intent.getStringExtra(SystemReminderScheduler.EXTRA_ITEM_ID) ?: return
+        val reminderId = intent.getStringExtra(SystemReminderScheduler.EXTRA_REMINDER_ID) ?: itemId
 
         context.stopService(Intent(context, RingingService::class.java))
         val nm = context.getSystemService(NotificationManager::class.java)
-        nm.cancel(AlarmReceiver.notificationIdFor(itemId))
+        nm.cancel(AlarmReceiver.notificationIdFor(itemId, reminderId))
     }
 
     companion object {

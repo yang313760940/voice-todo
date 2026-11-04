@@ -1,6 +1,7 @@
 package com.voicetodo.alarm
 
 import android.app.Service
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
@@ -24,33 +25,39 @@ class RingingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var stopRunnable: Runnable? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var latestStartId = 0
-    private var activeToken: ReminderToken? = null
+    private var foregroundNotificationId: Int? = null
+    private val activeReminderKeys = mutableSetOf<Pair<String, String>>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val token = ReminderToken.from(intent)
         if (token == null) { stopSelf(startId); return START_NOT_STICKY }
-        if (token == activeToken) return START_NOT_STICKY
-        latestStartId = startId
         scope.launch {
-            var foreground = false
+            var publishedByService = false
             try {
                 val repo = (application as VoiceTodoApp).repository
-                val delivered = repo.deliverReminder(token.itemId, token.revision, token.atMillis, Instant::now) { item ->
+                val delivered = repo.deliverReminder(
+                    token.itemId, token.reminderId, token.revision, token.atMillis, Instant::now,
+                ) { item ->
                     withContext(Dispatchers.Main.immediate) {
-                        if (startId != latestStartId) return@withContext false
-                        val notification = AlarmNotification.build(this@RingingService, item.id, item.title)
+                        val notification = AlarmNotification.build(
+                            this@RingingService, item.id, item.title, token.reminderId)
+                        val notificationId = AlarmReceiver.notificationIdFor(item.id, token.reminderId)
                         try {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                startForeground(AlarmReceiver.notificationIdFor(item.id), notification,
-                                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                            if (foregroundNotificationId == null) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    startForeground(notificationId, notification,
+                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                                } else {
+                                    startForeground(notificationId, notification)
+                                }
+                                foregroundNotificationId = notificationId
                             } else {
-                                startForeground(AlarmReceiver.notificationIdFor(item.id), notification)
+                                getSystemService(NotificationManager::class.java).notify(notificationId, notification)
                             }
-                            foreground = true
-                            activeToken = token
+                            publishedByService = true
+                            activeReminderKeys += token.itemId to token.reminderId
                             startRinging()
                             stopRunnable?.let { handler.removeCallbacks(it) }
                             val r = Runnable { stopSoundOnly() }
@@ -59,11 +66,13 @@ class RingingService : Service() {
                             true
                         } catch (e: Exception) {
                             android.util.Log.w("RingingService", "startForeground failed", e)
-                            AlarmReceiver.showFallbackNotification(this@RingingService, item)
+                            AlarmReceiver.showFallbackNotification(this@RingingService, item, token.reminderId)
                         }
                     }
                 }
-                if (!delivered || !foreground) stopSelfResult(startId)
+                if ((!delivered || !publishedByService) && activeReminderKeys.isEmpty()) {
+                    stopSelfResult(startId)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -121,6 +130,8 @@ class RingingService : Service() {
         }
         player?.release()
         player = null
+        activeReminderKeys.clear()
+        foregroundNotificationId = null
         super.onDestroy()
     }
 

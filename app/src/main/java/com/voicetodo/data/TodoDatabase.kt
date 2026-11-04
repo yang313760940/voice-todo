@@ -1,15 +1,19 @@
 package com.voicetodo.data
 
 import androidx.room.*
+import com.voicetodo.domain.Quadrant
+import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoReminder
-import com.voicetodo.domain.Quadrant
+import java.time.DayOfWeek
 import java.time.Duration
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.format.DateTimeFormatterBuilder
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,6 +47,9 @@ data class TodoEntity(
     val suggestedQuadrant: Quadrant? = null,
     /** 所属自建清单；为空表示收集箱。 */
     val listId: String? = null,
+    val recurrenceRule: String? = null,
+    val seriesId: String? = null,
+    val occurrenceDate: LocalDate? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -57,6 +64,9 @@ data class TodoEntity(
         quadrant = quadrant,
         suggestedQuadrant = suggestedQuadrant,
         listId = listId,
+        seriesId = seriesId,
+        occurrenceDate = occurrenceDate,
+        recurrence = RecurrenceCodec.decode(recurrenceRule),
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -72,6 +82,34 @@ data class TodoEntity(
             quadrant = item.quadrant,
             suggestedQuadrant = item.suggestedQuadrant,
             listId = item.listId,
+            recurrenceRule = item.recurrence?.let(RecurrenceCodec::encode),
+            seriesId = item.seriesId,
+            occurrenceDate = item.occurrenceDate,
+        )
+    }
+}
+
+internal object RecurrenceCodec {
+    fun encode(rule: RecurrenceRule): String = JSONObject().apply {
+        put("frequency", rule.frequency.name)
+        put("startDate", rule.startDate.toString())
+        put("weekdays", JSONArray().apply { rule.weekdays.sorted().forEach { put(it.name) } })
+        rule.dayOfMonth?.let { put("dayOfMonth", it) }
+        put("reminderTimes", JSONArray().apply { rule.reminderTimes.forEach { put(it.toString()) } })
+    }.toString()
+
+    fun decode(text: String?): RecurrenceRule? = text?.let {
+        val record = JSONObject(it)
+        val weekdays = record.optJSONArray("weekdays") ?: JSONArray()
+        val times = record.optJSONArray("reminderTimes") ?: JSONArray()
+        RecurrenceRule(
+            frequency = RecurrenceFrequency.valueOf(record.getString("frequency")),
+            startDate = LocalDate.parse(record.getString("startDate")),
+            weekdays = (0 until weekdays.length())
+                .map { index -> DayOfWeek.valueOf(weekdays.getString(index)) }
+                .toSet(),
+            dayOfMonth = record.takeIf { it.has("dayOfMonth") }?.getInt("dayOfMonth"),
+            reminderTimes = (0 until times.length()).map { index -> LocalTime.parse(times.getString(index)) },
         )
     }
 }
@@ -157,11 +195,12 @@ interface TodoDao {
         FocusSettingsEntity::class,
         TodoListEntity::class,
     ],
-    version = 6,
+    version = 7,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
+        AutoMigration(from = 6, to = 7),
     ],
     exportSchema = true,
 )

@@ -25,6 +25,8 @@ import com.voicetodo.domain.ReminderEdit
 import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.Clock
 import com.voicetodo.domain.SystemClock
+import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
 import com.voicetodo.speech.AudioRecorder
@@ -52,6 +54,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
+import java.time.DayOfWeek
 import java.util.UUID
 
 /** 录音状态机。 */
@@ -73,6 +76,8 @@ data class AiSettingsForm(
         "AiSettingsForm(baseUrl=$baseUrl, model=$model, apiKey=***, error=$error)"
 }
 
+enum class RepeatDraft { None, Daily, Weekly, Monthly }
+
 data class ReminderDraft(
     val id: String = UUID.randomUUID().toString(),
     val kind: ReminderDraftKind,
@@ -87,6 +92,11 @@ data class DetailDraft(
     val remindAt: String,
     val reminders: List<ReminderDraft>,
     val listId: String? = null,
+    val repeat: RepeatDraft = RepeatDraft.None,
+    val weekdays: Set<DayOfWeek> = emptySet(),
+    val monthDay: String = "",
+    val repeatTime: String = "09:00",
+    val seriesRule: RecurrenceRule? = null,
 ) {
     fun edit(zone: ZoneId): TodoEdit {
         fun parseTime(text: String, originalTime: Instant?): Instant? {
@@ -122,13 +132,14 @@ data class DetailDraft(
     }
 
     companion object {
-        fun from(item: TodoItem, zone: ZoneId): DetailDraft {
+        fun from(item: TodoItem, zone: ZoneId, series: TodoItem? = null): DetailDraft {
             val rules = if (item.reminders.isNotEmpty()) item.reminders.map {
                 if (it.beforeDue == null) ReminderDraft(it.id, ReminderDraftKind.Specified, timeText(it.at, zone))
                 else ReminderDraft(it.id, ReminderDraftKind.Relative, it.beforeDue.toMinutes().toString())
             } else listOf(ReminderDraft(item.id, ReminderDraftKind.Specified, timeText(item.remindAt, zone)))
             return DetailDraft(item, item.title, item.plannedDate?.toString().orEmpty(),
-                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules, item.listId)
+                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules, item.listId,
+                seriesRule = series?.recurrence)
         }
         fun forCreation(title: String, listId: String? = null) = DetailDraft(
             null, title, "", "", "", listOf(ReminderDraft(kind = ReminderDraftKind.Specified)), listId,
@@ -165,6 +176,7 @@ data class UiState(
     val aiDraft: AiDraft? = null,
     val aiBusy: Boolean = false,
     val aiError: String? = null,
+    val seriesLabels: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -235,13 +247,16 @@ class TodoViewModel @JvmOverloads constructor(
         val pending = useCases.listIncomplete()
         val completed = useCases.listCompleted()
         val lists = useCases.listTodoLists()
+        val labels = useCases.listRecurrenceSeries().associate {
+            it.id to recurrenceLabel(it.recurrence!!)
+        }
         val delivered = (pending + completed).filter { useCases.wasDelivered(it) }.map { it.id }.toSet()
         val selected = _state.value.selectedView
         val safeView = if (selected is TodoView.CustomList &&
             lists.none { it.id == selected.listId }) TodoView.Inbox else selected
         _state.value = _state.value.copy(items = pending, completedItems = completed,
             todoLists = lists, selectedView = safeView,
-            deliveredIds = delivered, now = clock.now(), loading = false)
+            deliveredIds = delivered, now = clock.now(), loading = false, seriesLabels = labels)
     }
 
     private fun action(block: suspend () -> Unit) {
@@ -733,7 +748,9 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onOpenDetail(id: String) = action {
-        _state.value = _state.value.copy(detail = DetailDraft.from(useCases.findItem(id), zoneId))
+        val item = useCases.findItem(id)
+        val series = item.seriesId?.let { runCatching { useCases.findItem(it) }.getOrNull() }
+        _state.value = _state.value.copy(detail = DetailDraft.from(item, zoneId, series))
     }
 
     fun onDetailTitleChange(title: String) {
@@ -780,6 +797,43 @@ class TodoViewModel @JvmOverloads constructor(
             reminders = detail.reminders.filterIndexed { current, _ -> current != index }))
     }
 
+    fun onRepeatChange(repeat: RepeatDraft) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || detail.original != null) return
+        val cleared = if (repeat == RepeatDraft.None) detail else detail.copy(plannedDate = "", dueAt = "")
+        _state.value = _state.value.copy(detail = cleared.copy(repeat = repeat))
+    }
+
+    fun onWeekdayToggle(day: DayOfWeek) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || detail.original != null) return
+        val weekdays = if (day in detail.weekdays) detail.weekdays - day else detail.weekdays + day
+        _state.value = _state.value.copy(detail = detail.copy(weekdays = weekdays))
+    }
+
+    fun onWorkdaysSelected() {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || detail.original != null) return
+        val workdays = setOf(
+            DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
+            DayOfWeek.THURSDAY, DayOfWeek.FRIDAY,
+        )
+        _state.value = _state.value.copy(detail = detail.copy(weekdays = workdays))
+    }
+
+    fun onMonthDayChange(value: String) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || detail.original != null) return
+        _state.value = _state.value.copy(
+            detail = detail.copy(monthDay = value.filter(Char::isDigit).take(2)))
+    }
+
+    fun onRepeatTimeChange(value: String) {
+        val detail = _state.value.detail ?: return
+        if (_state.value.busy || detail.original != null) return
+        _state.value = _state.value.copy(detail = detail.copy(repeatTime = value))
+    }
+
     fun onCancelDetail() {
         if (!_state.value.busy) _state.value = _state.value.copy(detail = null, message = null)
     }
@@ -790,29 +844,35 @@ class TodoViewModel @JvmOverloads constructor(
             val edit = detail.edit(zoneId)
             val original = detail.original
             val message = if (original == null) {
-                require(edit.reminders.isNullOrEmpty() || edit.reminders.size == 1) {
-                    "手动创建暂只支持一个指定提醒"
+                if (detail.repeat != RepeatDraft.None) {
+                    val result = useCases.createRecurring(edit.title, recurrenceRule(detail), edit.listId)
+                    _state.value = _state.value.copy(addOpen = false, addTargetListId = null)
+                    recurrenceMessage(result.outcome)
+                } else {
+                    require(edit.reminders.isNullOrEmpty() || edit.reminders.size == 1) {
+                        "手动创建暂只支持一个指定提醒"
+                    }
+                    require(edit.reminders.orEmpty().all { it.beforeDue == null }) {
+                        "新事项请先创建，再在详情中添加相对提醒"
+                    }
+                    val result = useCases.confirmDraft(
+                        edit.title,
+                        edit.remindAt,
+                        edit.plannedDate,
+                        edit.dueAt,
+                        listId = edit.listId,
+                    )
+                    draftRevision++
+                    _state.value = _state.value.copy(
+                        addOpen = false,
+                        addTargetListId = null,
+                        draftText = "",
+                        draftHasTime = false,
+                        draftTime = null,
+                        inputError = null,
+                    )
+                    outcomeMessage(result.outcome)
                 }
-                require(edit.reminders.orEmpty().all { it.beforeDue == null }) {
-                    "新事项请先创建，再在详情中添加相对提醒"
-                }
-                val result = useCases.confirmDraft(
-                    edit.title,
-                    edit.remindAt,
-                    edit.plannedDate,
-                    edit.dueAt,
-                    listId = edit.listId,
-                )
-                draftRevision++
-                _state.value = _state.value.copy(
-                    addOpen = false,
-                    addTargetListId = null,
-                    draftText = "",
-                    draftHasTime = false,
-                    draftTime = null,
-                    inputError = null,
-                )
-                outcomeMessage(result.outcome)
             } else {
                 val result = useCases.updateItem(original.id, edit)
                 result.outcome?.let(::outcomeMessage) ?: "事项已更新（提醒安排未改变）"
@@ -823,8 +883,11 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onComplete(id: String) = action {
+        val recurringInstance = useCases.findItem(id).seriesId != null
         useCases.completeItem(id)
-        _state.value = _state.value.copy(detail = null, message = "事项已完成，未来提醒已取消")
+        _state.value = _state.value.copy(detail = null, message = if (recurringInstance) {
+            "本次已完成，后续重复实例仍会按时提醒"
+        } else "事项已完成，未来提醒已取消")
         reload()
     }
 
@@ -840,6 +903,45 @@ class TodoViewModel @JvmOverloads constructor(
         val result = useCases.retryReminders(id)
         _state.value = _state.value.copy(message = outcomeMessage(result.outcome))
         reload()
+    }
+
+    fun onStopRecurrence(id: String) = action {
+        useCases.stopRecurrence(id)
+        _state.value = _state.value.copy(detail = null, message = "已结束整个重复安排，已完成历史仍保留")
+        reload()
+    }
+
+    private fun recurrenceRule(detail: DetailDraft): RecurrenceRule {
+        val frequency = when (detail.repeat) {
+            RepeatDraft.Daily -> RecurrenceFrequency.Daily
+            RepeatDraft.Weekly -> RecurrenceFrequency.Weekly
+            RepeatDraft.Monthly -> RecurrenceFrequency.Monthly
+            RepeatDraft.None -> throw IllegalArgumentException("请选择重复频率")
+        }
+        val time = try {
+            LocalTime.parse(detail.repeatTime.trim())
+        } catch (e: DateTimeParseException) {
+            throw IllegalArgumentException("重复提醒时间格式：HH:mm", e)
+        }
+        val monthDay = if (frequency == RecurrenceFrequency.Monthly) {
+            detail.monthDay.toIntOrNull()
+                ?: throw IllegalArgumentException("每月重复请输入 1 至 31 的日期")
+        } else null
+        val rule = RecurrenceRule(
+            frequency = frequency,
+            startDate = clock.now().atZone(zoneId).toLocalDate(),
+            weekdays = detail.weekdays,
+            dayOfMonth = monthDay,
+            reminderTimes = listOf(time),
+        )
+        rule.validate()
+        return rule
+    }
+
+    private fun recurrenceMessage(outcome: ReminderOutcome): String = when (outcome) {
+        ReminderOutcome.NotRequested -> "重复事项已保存"
+        ReminderOutcome.Scheduled -> "重复事项已保存，接下来两次实例已安排提醒"
+        ReminderOutcome.NotReady -> "重复事项已保存，但部分实例提醒未就绪（缺精确闹钟权限或系统限制）"
     }
 
     private fun outcomeMessage(outcome: ReminderOutcome): String = when (outcome) {

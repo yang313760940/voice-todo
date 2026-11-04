@@ -5,9 +5,10 @@ import java.time.LocalDate
 import java.util.UUID
 
 /**
- * 一条待办事项（本切片只支持单条、非重复）。
+ * 一条待办事项或重复安排中的一个实例。
  *
- * 术语见 GLOSSARY.md：事项与提醒相互独立；事项可以不设置提醒，计划日期、截止时间与提醒也相互独立。
+ * 术语见 GLOSSARY.md：事项与提醒相互独立；重复安排本身是模板（[recurrence]），
+ * 每个实例通过 [seriesId] 与 [occurrenceDate] 保持稳定身份并独立完成。
  */
 data class TodoItem(
     val id: String = UUID.randomUUID().toString(),
@@ -33,6 +34,12 @@ data class TodoItem(
     val suggestedQuadrant: Quadrant? = null,
     /** 所属自建清单；为空表示收集箱。 */
     val listId: String? = null,
+    /** 实例所属重复安排；为空表示普通事项或重复模板。 */
+    val seriesId: String? = null,
+    /** 实例对应的当地日期；与 [seriesId] 一起构成稳定身份。 */
+    val occurrenceDate: LocalDate? = null,
+    /** 重复模板的规则；实例自身为空，避免每次实例重复保存规则。 */
+    val recurrence: RecurrenceRule? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */

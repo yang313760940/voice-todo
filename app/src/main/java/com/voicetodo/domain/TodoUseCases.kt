@@ -3,8 +3,11 @@ package com.voicetodo.domain
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
+import java.time.ZoneId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 enum class ReminderOutcome {
     /** 用户没有设置提醒，不需要系统调度。 */
@@ -55,11 +58,18 @@ class TodoUseCases(
     private val repo: TodoRepository,
     private val scheduler: ReminderScheduler,
     private val clock: Clock,
+    private val zone: ZoneId = ZoneId.systemDefault(),
 ) {
     private val mutations = Mutex()
     suspend fun listItems(): List<TodoItem> = repo.all()
-    suspend fun listIncomplete(): List<TodoItem> = repo.incomplete()
-    suspend fun listCompleted(): List<TodoItem> = repo.completed()
+    suspend fun listRecurrenceSeries(): List<TodoItem> = repo.all().filter { it.recurrence != null }
+    suspend fun listIncomplete(): List<TodoItem> = withContext(Dispatchers.IO) {
+        mutations.withLock {
+            ensureAllSeries(clock.now())
+            repo.incomplete().filter { it.recurrence == null }
+        }
+    }
+    suspend fun listCompleted(): List<TodoItem> = repo.completed().filter { it.recurrence == null }
     suspend fun listTodoLists(): List<TodoList> = repo.lists()
     suspend fun findItem(id: String): TodoItem =
         repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
@@ -69,7 +79,8 @@ class TodoUseCases(
 
     suspend fun reconcileReminders() = mutations.withLock {
         val now = clock.now()
-        for (item in repo.incomplete()) {
+        ensureAllSeries(now)
+        for (item in repo.incomplete().filter { it.recurrence == null }) {
             if (item.reminders.isNotEmpty()) {
                 val pending = item.reminders.map { reminder ->
                     if (reminder.at.isAfter(now) && repo.deliveredAt(item.id, reminder.id, reminder.revision) == null)
@@ -85,6 +96,7 @@ class TodoUseCases(
 
     suspend fun updateItem(id: String, edit: TodoEdit): UpdateResult = mutations.withLock {
         val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        require(item.recurrence == null) { "重复安排模板不能作为普通事项编辑" }
         require(item.completedAt == null) { "已完成事项请先恢复再编辑" }
         val title = edit.title.trim()
         require(title.isNotEmpty()) { "标题不能为空" }
@@ -325,6 +337,47 @@ class TodoUseCases(
         else -> ReminderOutcome.Scheduled
     }
 
+    /**
+     * 创建重复安排模板，并按需物化接下来两次实例。
+     * 模板本身不出现在待办列表；每次实例都有稳定身份并独立调度、完成。
+     */
+    suspend fun createRecurring(
+        title: String,
+        rule: RecurrenceRule,
+        listId: String? = null,
+    ): ConfirmResult = mutations.withLock {
+        val clean = title.trim()
+        require(clean.isNotEmpty()) { "标题不能为空" }
+        rule.validate()
+        require(listId == null || repo.lists().any { it.id == listId }) { "清单不存在" }
+        val now = clock.now()
+        val series = TodoItem(
+            title = clean,
+            createdAt = now,
+            listId = listId,
+            recurrence = rule,
+        )
+        repo.save(series)
+        ConfirmResult(series, ensureSeries(series, emptyList(), now))
+    }
+
+    /** 结束整个重复安排；保留已完成历史，撤销未完成实例的未来提醒。 */
+    suspend fun stopRecurrence(occurrenceOrSeriesId: String) = mutations.withLock {
+        val item = repo.findById(occurrenceOrSeriesId) ?: throw IllegalArgumentException("事项不存在")
+        val series = repo.findById(item.seriesId ?: item.id) ?: return@withLock
+        if (series.recurrence == null) return@withLock
+        stopSeries(series)
+    }
+
+    /**
+     * 系统闹钟触发后补充后续实例。进程未打开时也由接收器调用，
+     * 这样只预排两次也不会在用户长期不打开应用时停摆。
+     */
+    suspend fun ensureNextOccurrence(occurrenceId: String) = mutations.withLock {
+        val item = repo.findById(occurrenceId) ?: return@withLock
+        item.seriesId?.let { ensureSeriesFor(it, clock.now()) }
+    }
+
     /** 用户取消确认：不创建事项、不调度。 */
     fun cancelDraft() {
         // 无副作用
@@ -345,6 +398,7 @@ class TodoUseCases(
         )
         repo.save(completed)
         scheduler.cancel(id)
+        item.seriesId?.let { ensureSeriesFor(it, clock.now()) }
         completed
     }
 
@@ -411,7 +465,94 @@ class TodoUseCases(
 
     /** 删除事项并取消其未来闹钟。 */
     suspend fun deleteItem(id: String) = mutations.withLock {
-        repo.delete(id)
-        scheduler.cancel(id)
+        val item = repo.findById(id)
+        if (item?.recurrence != null) {
+            stopSeries(item)
+        } else {
+            repo.delete(id)
+            scheduler.cancel(id)
+        }
+    }
+
+    private suspend fun ensureAllSeries(now: Instant) {
+        val all = repo.all()
+        val bySeries = all.filter { it.seriesId != null }.groupBy { it.seriesId }
+        for (series in all.filter { it.recurrence != null }) {
+            ensureSeries(series, bySeries[series.id].orEmpty(), now)
+        }
+    }
+
+    private suspend fun ensureSeriesFor(seriesId: String, now: Instant) {
+        val series = repo.findById(seriesId) ?: return
+        if (series.recurrence == null) return
+        ensureSeries(series, repo.all().filter { it.seriesId == seriesId }, now)
+    }
+
+    private suspend fun ensureSeries(
+        series: TodoItem,
+        occurrences: List<TodoItem>,
+        now: Instant,
+    ): ReminderOutcome {
+        val rule = series.recurrence ?: return ReminderOutcome.NotRequested
+        val today = now.atZone(zone).toLocalDate()
+        val existingDates = occurrences.mapNotNull { it.occurrenceDate }.toSet()
+        var upcomingCount = occurrences.count {
+            it.completedAt == null && it.occurrenceDate != null && !it.occurrenceDate.isBefore(today) &&
+                (it.reminders.isEmpty() || it.reminders.any { reminder -> reminder.at.isAfter(now) })
+        }
+        if (upcomingCount >= FUTURE_INSTANCES) return ReminderOutcome.NotRequested
+
+        var candidate = rule.firstOccurrenceOnOrAfter(maxOf(today, rule.startDate))
+        var outcome = ReminderOutcome.NotRequested
+        var guard = 0
+        while (upcomingCount < FUTURE_INSTANCES && guard++ < 1000) {
+            val date = candidate
+            val instants = rule.reminderTimes.map { rule.instantOn(date, it, zone) }
+            val futureInstants = instants.filter { it.isAfter(now) }
+            if (date !in existingDates && futureInstants.isNotEmpty()) {
+                val occurrence = TodoItem(
+                    id = rule.occurrenceId(series.id, date),
+                    title = series.title,
+                    remindAt = futureInstants.min(),
+                    plannedDate = date,
+                    createdAt = now,
+                    reminders = rule.reminderTimes.mapIndexed { index, _ ->
+                        TodoReminder(rule.reminderId(series.id, date, index), instants[index])
+                    },
+                    seriesId = series.id,
+                    occurrenceDate = date,
+                    listId = series.listId,
+                )
+                repo.save(occurrence)
+                val (_, createdOutcome) = scheduleMultiple(occurrence)
+                outcome = mergeOutcome(outcome, createdOutcome)
+                upcomingCount++
+            }
+            candidate = rule.nextOccurrenceAfter(date)
+        }
+        return outcome
+    }
+
+    private suspend fun stopSeries(series: TodoItem) {
+        val today = clock.now().atZone(zone).toLocalDate()
+        repo.all().filter {
+            it.seriesId == series.id && it.completedAt == null &&
+                (it.occurrenceDate == null || !it.occurrenceDate.isBefore(today))
+        }.forEach {
+            scheduler.cancel(it.id)
+            repo.delete(it.id)
+        }
+        repo.delete(series.id)
+        scheduler.cancel(series.id)
+    }
+
+    private fun mergeOutcome(first: ReminderOutcome, second: ReminderOutcome): ReminderOutcome = when {
+        first == ReminderOutcome.NotReady || second == ReminderOutcome.NotReady -> ReminderOutcome.NotReady
+        first == ReminderOutcome.Scheduled || second == ReminderOutcome.Scheduled -> ReminderOutcome.Scheduled
+        else -> ReminderOutcome.NotRequested
+    }
+
+    private companion object {
+        const val FUTURE_INSTANCES = 2
     }
 }

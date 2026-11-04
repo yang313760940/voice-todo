@@ -60,6 +60,12 @@ class AlarmReceiver : BroadcastReceiver() {
                 showFallbackNotification(context, it, token.reminderId)
             }
         }
+        // 闹钟已到点：补排下一条实例，避免用户长期不打开应用后重复安排停摆。
+        runCatching {
+            (context.applicationContext as VoiceTodoApp).useCases.ensureNextOccurrence(itemId)
+        }.onFailure {
+            android.util.Log.w(TAG, "补充后续重复实例失败", it)
+        }
     }
 
     companion object {

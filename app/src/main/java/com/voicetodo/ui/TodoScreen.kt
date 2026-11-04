@@ -25,9 +25,12 @@ import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoView
 import com.voicetodo.domain.ReminderOutcome
+import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.isOverdue
 import com.voicetodo.domain.itemsForView
 import com.voicetodo.domain.supportsUnscheduledFilter
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -531,15 +534,31 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
                 label = { Text("标题") }, enabled = editable,
                 modifier = Modifier.fillMaxWidth().testTag("detail_title_field"))
         }
-        item {
-            DateField("计划日期", "yyyy-MM-dd", detail.plannedDate, "plannedDate", editable,
-                onChange = { vm.onDetailValueChange(DetailField.Plan, it) },
-                onPick = { pick(DetailField.Plan, detail.plannedDate) })
+        if (original == null) {
+            item { RecurrenceEditor(detail, vm) }
+        } else {
+            detail.seriesRule?.let { rule ->
+                item {
+                    Text("重复：${recurrenceLabel(rule)} · 本次 ${original.occurrenceDate ?: ""}",
+                        modifier = Modifier.testTag("detail_recurrence_summary"))
+                    TextButton(onClick = { vm.onStopRecurrence(original.id) }, enabled = enabled,
+                        modifier = Modifier.testTag("stop_recurrence_button")) {
+                        Text("结束整个重复安排")
+                    }
+                }
+            }
         }
-        item {
-            DateField("截止时间", "yyyy-MM-dd HH:mm", detail.dueAt, "dueAt", editable,
-                onChange = { vm.onDetailValueChange(DetailField.Due, it) },
-                onPick = { pick(DetailField.Due, detail.dueAt) })
+        if (original != null || detail.repeat == RepeatDraft.None) {
+            item {
+                DateField("计划日期", "yyyy-MM-dd", detail.plannedDate, "plannedDate", editable,
+                    onChange = { vm.onDetailValueChange(DetailField.Plan, it) },
+                    onPick = { pick(DetailField.Plan, detail.plannedDate) })
+            }
+            item {
+                DateField("截止时间", "yyyy-MM-dd HH:mm", detail.dueAt, "dueAt", editable,
+                    onChange = { vm.onDetailValueChange(DetailField.Due, it) },
+                    onPick = { pick(DetailField.Due, detail.dueAt) })
+            }
         }
         item {
             Box {
@@ -573,7 +592,8 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
             Text("每个事项只属于一个清单；未选择时进入收集箱。",
                 style = MaterialTheme.typography.bodySmall)
         }
-        item { Text("提醒安排", style = MaterialTheme.typography.titleMedium) }
+        if (original != null || detail.repeat == RepeatDraft.None) {
+            item { Text("提醒安排", style = MaterialTheme.typography.titleMedium) }
         itemsIndexed(detail.reminders, key = { _, reminder -> reminder.id }) { index, reminder ->
             Card(Modifier.fillMaxWidth().testTag("detail_reminder_$index")) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
@@ -606,29 +626,30 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
                                 Text("清除提醒时间")
                             }
                         }
-                    } else {
-                        OutlinedTextField(reminder.value, { vm.onReminderValueChange(index, it.filter(Char::isDigit)) },
-                            enabled = editable, singleLine = true, label = { Text("截止前多少分钟") },
-                            modifier = Modifier.fillMaxWidth().testTag("detail_reminder_value_$index"))
+                        } else {
+                            OutlinedTextField(reminder.value, { vm.onReminderValueChange(index, it.filter(Char::isDigit)) },
+                                enabled = editable, singleLine = true, label = { Text("截止前多少分钟") },
+                                modifier = Modifier.fillMaxWidth().testTag("detail_reminder_value_$index"))
                     }
                     if (original != null) {
                         TextButton(onClick = { vm.onRemoveReminder(index) }, enabled = editable,
                             modifier = Modifier.testTag("remove_reminder_$index")) { Text("删除此提醒") }
                     }
+                    }
                 }
             }
-        }
-        item {
-            if (original != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Specified) }, enabled = editable,
-                        modifier = Modifier.testTag("add_specified_reminder")) { Text("新增指定提醒") }
-                    OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Relative) }, enabled = editable,
-                        modifier = Modifier.testTag("add_relative_reminder")) { Text("新增相对提醒") }
+            item {
+                if (original != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Specified) }, enabled = editable,
+                            modifier = Modifier.testTag("add_specified_reminder")) { Text("新增指定提醒") }
+                        OutlinedButton(onClick = { vm.onAddReminder(ReminderDraftKind.Relative) }, enabled = editable,
+                            modifier = Modifier.testTag("add_relative_reminder")) { Text("新增相对提醒") }
+                    }
                 }
+                Text("相对提醒按截止时间提前；计划日期不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
+                    style = MaterialTheme.typography.bodySmall)
             }
-            Text("相对提醒按截止时间提前；计划日期不会自动安排提醒。时间按 ${vm.zoneId.id} 输入。",
-                style = MaterialTheme.typography.bodySmall)
         }
         item {
             original?.let { ItemStatus(it, state) }
@@ -651,6 +672,93 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
             TextButton(onClick = vm::onCancelDetail, enabled = !state.busy,
                 modifier = Modifier.testTag("detail_cancel_button")) { Text("返回 / 取消修改") }
         }
+    }
+}
+
+@Composable
+private fun RecurrenceEditor(detail: DetailDraft, vm: TodoViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("重复", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                RepeatDraft.None to "不重复",
+                RepeatDraft.Daily to "每天",
+                RepeatDraft.Weekly to "每周",
+                RepeatDraft.Monthly to "每月",
+            ).forEach { (kind, label) ->
+                FilterChip(
+                    selected = detail.repeat == kind,
+                    onClick = { vm.onRepeatChange(kind) },
+                    label = { Text(label) },
+                    modifier = Modifier.testTag("repeat_${kind.name.lowercase()}"),
+                )
+            }
+        }
+        when (detail.repeat) {
+            RepeatDraft.Weekly -> {
+                Text("选择星期", style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    DayOfWeek.entries.take(4).forEach { day -> WeekdayChip(day, detail, vm) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    DayOfWeek.entries.drop(4).forEach { day -> WeekdayChip(day, detail, vm) }
+                    TextButton(onClick = vm::onWorkdaysSelected,
+                        modifier = Modifier.testTag("repeat_workdays")) { Text("工作日") }
+                }
+            }
+            RepeatDraft.Monthly -> {
+                OutlinedTextField(
+                    value = detail.monthDay,
+                    onValueChange = vm::onMonthDayChange,
+                    label = { Text("每月日期（1 至 31）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("repeat_month_day"),
+                )
+            }
+            else -> Unit
+        }
+        if (detail.repeat != RepeatDraft.None) {
+            OutlinedTextField(
+                value = detail.repeatTime,
+                onValueChange = vm::onRepeatTimeChange,
+                label = { Text("重复提醒时间（时:分）") },
+                placeholder = { Text("09:00") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("repeat_time_field"),
+            )
+            Text("重复实例按 ${vm.zoneId.id} 的当地日历生成；每月 31 日在短月取月末；只预排接下来两次实例。",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun WeekdayChip(day: DayOfWeek, detail: DetailDraft, vm: TodoViewModel) {
+    FilterChip(
+        selected = day in detail.weekdays,
+        onClick = { vm.onWeekdayToggle(day) },
+        label = { Text(weekdayLabel(day)) },
+        modifier = Modifier.testTag("repeat_weekday_${day.name}"),
+    )
+}
+
+private fun weekdayLabel(day: DayOfWeek): String = when (day) {
+    DayOfWeek.MONDAY -> "一"
+    DayOfWeek.TUESDAY -> "二"
+    DayOfWeek.WEDNESDAY -> "三"
+    DayOfWeek.THURSDAY -> "四"
+    DayOfWeek.FRIDAY -> "五"
+    DayOfWeek.SATURDAY -> "六"
+    DayOfWeek.SUNDAY -> "日"
+}
+
+internal fun recurrenceLabel(rule: RecurrenceRule): String {
+    val time = rule.reminderTimes.joinToString("、") { it.toString() }
+    return when (rule.frequency) {
+        RecurrenceFrequency.Daily -> "每天 $time"
+        RecurrenceFrequency.Weekly ->
+            "每周 ${rule.weekdays.sorted().joinToString("") { weekdayLabel(it) }} $time"
+        RecurrenceFrequency.Monthly -> "每月 ${rule.dayOfMonth} 日 $time"
     }
 }
 
@@ -687,6 +795,11 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
                         modifier = Modifier.testTag("todo_list_name_${item.id}"))
                 }
             }
+            if (item.seriesId != null) {
+                Text("重复实例${state.seriesLabels[item.seriesId]?.let { " · $it" } ?: ""}",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.testTag("recurrence_${item.id}"))
+            }
             item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
             item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
             if (item.reminders.isEmpty()) {
@@ -710,7 +823,7 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
                     modifier = Modifier.testTag(if (item.completedAt == null) "complete_${item.id}" else "restore_${item.id}")) {
                     Text(if (item.completedAt == null) "完成" else "恢复")
                 }
-                TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
+                if (item.seriesId == null) TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
                 if (item.completedAt == null && item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
                     TextButton(onClick = onRetry, enabled = enabled,
                         modifier = Modifier.testTag("retry_reminders_${item.id}")) { Text("重试提醒") }

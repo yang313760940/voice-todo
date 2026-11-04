@@ -55,7 +55,7 @@ class TodoScreenTest {
         val app = ApplicationProvider.getApplicationContext<Application>()
         db = Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()
         repo = RoomTodoRepository(db, FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai")))
-        uc = TodoUseCases(repo, scheduler, clock)
+        uc = TodoUseCases(repo, scheduler, clock, ZoneId.of("Asia/Shanghai"))
         compose.runOnIdle { vm = makeViewModel(app); visibleVm = vm }
         compose.setContent { MaterialTheme { visibleVm?.let { key(it) { TodoScreen(it) } } } }
         waitFor { !vm.state.value.loading }
@@ -393,6 +393,37 @@ class TodoScreenTest {
         Assert.assertEquals(2, reduced.reminders.size)
         Assert.assertEquals(1, scheduler.cancelled.count { it == item.id })
         Assert.assertEquals(2, scheduler.pending.size)
+    }
+
+    @Test fun dailyRecurrenceCanBeCreatedFromDetailAndReopenedWithTwoConsecutiveInstances() {
+        openAdd()
+        compose.onNodeWithTag("title_field").performTextInput("每日站会")
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("manual_create_button"))
+        compose.onNodeWithTag("manual_create_button").performClick()
+        waitFor { vm.state.value.detail != null && !vm.state.value.busy }
+        detailClick("repeat_daily")
+        replaceDetail("repeat_time_field", "18:00")
+        saveDetail()
+
+        waitFor { vm.state.value.items.size == 2 && !vm.state.value.busy }
+        Assert.assertEquals("重复事项已保存，接下来两次实例已安排提醒", vm.state.value.message)
+        val instances = vm.state.value.items.sortedBy { it.occurrenceDate }
+        Assert.assertEquals(
+            listOf(LocalDate.of(2026, 11, 4), LocalDate.of(2026, 11, 5)),
+            instances.map { it.occurrenceDate },
+        )
+        Assert.assertEquals(1, instances.map { it.seriesId }.distinct().size)
+        Assert.assertNotNull(instances.first().seriesId)
+        Assert.assertTrue(vm.state.value.seriesLabels.containsKey(instances.first().seriesId))
+        compose.onNodeWithTag("recurrence_${instances.first().id}", useUnmergedTree = true)
+            .assertTextContains("每天", substring = true)
+
+        compose.runOnIdle { store.clear(); vm = makeViewModel(); visibleVm = vm }
+        waitFor { vm.state.value.items.size == 2 && !vm.state.value.loading }
+        val reopened = vm.state.value.items.sortedBy { it.occurrenceDate }.first()
+        open(reopened)
+        compose.onNodeWithTag("detail_recurrence_summary")
+            .assertTextContains("每天 18:00", substring = true)
     }
 
     private fun waitFor(condition: () -> Boolean) {

@@ -3,6 +3,8 @@ package com.voicetodo.ai
 import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.ReminderEdit
 import com.voicetodo.domain.TodoEdit
+import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.domain.RecurrenceRule
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -26,7 +28,7 @@ data class AiReminderDraft(
 )
 
 /**
- * 单事项整理草稿。它不是正式事项，确认前不持久化、也不请求系统闹钟。
+ * 集合中的一条事项草稿。它不是正式事项，确认前不持久化、也不请求系统闹钟。
  */
 data class AiDraft(
     val itemId: String = UUID.randomUUID().toString(),
@@ -38,6 +40,7 @@ data class AiDraft(
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
     val clarification: String? = null,
     val noReminderAcknowledged: Boolean = false,
+    val recurrence: AiRecurrenceDraft? = null,
 ) {
     val hasUsableReminder: Boolean
         get() = reminders.any { it.value.isNotBlank() }
@@ -81,26 +84,60 @@ data class AiDraft(
     }
 }
 
+data class AiRecurrenceDraft(
+    val frequency: RecurrenceFrequency,
+    val weekdays: Set<Int> = emptySet(),
+    val monthDay: String = "",
+) {
+    fun toRule(): RecurrenceRule = RecurrenceRule(frequency, weekdays,
+        monthDay.takeIf { it.isNotBlank() }?.toIntOrNull()
+            ?: if (monthDay.isBlank()) null else throw IllegalArgumentException("每月重复请输入整数日期"))
+        .validate()
+}
+
 interface AiAssistClient {
     /**
      * 仅把 [text] 与日期/时区上下文发送给用户配置的服务。
      * 实现不得自动重试；失败由用户决定是否再次发起。
      */
     suspend fun organize(text: String, context: AiPromptContext, settings: AiSettings): AiDraft
+
+    /** 兼容已有单草稿适配器；在线客户端实现真实多草稿契约。 */
+    suspend fun organizeDrafts(text: String, context: AiPromptContext, settings: AiSettings): List<AiDraft> =
+        listOf(organize(text, context, settings))
 }
 
 class AiAssistException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-/** 解析模型返回的单个 JSON 草稿；任何无法验证的字段都不会进入正式事项。 */
+/** 解析草稿集合；任何无法验证的字段都不会进入正式事项。 */
 internal object AiDraftParser {
     fun parse(content: String, sourceText: String, zoneId: ZoneId): AiDraft {
+        val drafts = parseDrafts(content, sourceText, zoneId)
+        if (drafts.size != 1) throw AiAssistException("AI 返回了多个草稿，请使用批量核对入口")
+        return drafts.single()
+    }
+
+    fun parseDrafts(content: String, sourceText: String, zoneId: ZoneId): List<AiDraft> {
         val jsonText = extractJson(content)
         val json = try {
             JSONObject(jsonText)
         } catch (e: JSONException) {
             throw AiAssistException("AI 返回内容不是有效 JSON；文字已保留，可手动创建", e)
         }
-        val title = json.optString("title").trim()
+        // 旧服务的单对象仍可核对，集合结构错误则整体走既有失败路径。
+        if (!json.has("drafts")) return listOf(parseRecord(json, sourceText, zoneId))
+        val records = json.optJSONArray("drafts")
+            ?: throw AiAssistException("AI 返回的草稿列表格式无效；文字已保留")
+        if (records.length() == 0) throw AiAssistException("AI 没有返回事项草稿；文字已保留")
+        return (0 until records.length()).map { index ->
+            val record = records.optJSONObject(index)
+                ?: throw AiAssistException("AI 返回的草稿格式无效；文字已保留")
+            parseRecord(record, sourceText, zoneId)
+        }
+    }
+
+    private fun parseRecord(json: JSONObject, sourceText: String, zoneId: ZoneId): AiDraft {
+        val title = (json.opt("title") as? String)?.trim().orEmpty()
         if (title.isEmpty()) {
             throw AiAssistException("AI 返回的草稿缺少事项名称；文字已保留，可手动创建")
         }
@@ -114,6 +151,9 @@ internal object AiDraftParser {
         val dueAt = optionalText(json, "dueAt")?.let {
             formatLocal(parseDateTime(it, zoneId, "截止时间"), zoneId)
         }.orEmpty()
+        if (json.has("reminders") && !json.isNull("reminders") && json.opt("reminders") !is JSONArray) {
+            throw AiAssistException("AI 返回的提醒列表格式无效；文字已保留")
+        }
         val reminders = parseReminders(json.optJSONArray("reminders"), zoneId)
         val quadrant = parseQuadrant(optionalText(json, "quadrant"))
         val clarification = optionalText(json, "clarification")
@@ -125,7 +165,27 @@ internal object AiDraftParser {
             reminders = reminders,
             quadrant = quadrant,
             clarification = clarification,
+            recurrence = parseRecurrence(json),
         )
+    }
+
+    private fun parseRecurrence(json: JSONObject): AiRecurrenceDraft? {
+        if (!json.has("recurrence") || json.isNull("recurrence")) return null
+        try {
+            val rule = json.getJSONObject("recurrence")
+            val frequency = when (rule.getString("frequency").uppercase()) {
+                "DAILY" -> RecurrenceFrequency.Daily
+                "WEEKLY" -> RecurrenceFrequency.Weekly
+                "MONTHLY" -> RecurrenceFrequency.Monthly
+                else -> throw IllegalArgumentException("未知重复类型")
+            }
+            val days = if (rule.has("weekdays")) rule.getJSONArray("weekdays") else JSONArray()
+            val weekdays = (0 until days.length()).map { days.getString(it).toInt() }.toSet()
+            val monthDay = optionalText(rule, "monthDay").orEmpty()
+            return AiRecurrenceDraft(frequency, weekdays, monthDay).also { it.toRule() }
+        } catch (e: Exception) {
+            throw AiAssistException("AI 返回的重复规则无效；文字已保留，可手动填写", e)
+        }
     }
 
     private fun parseReminders(array: JSONArray?, zoneId: ZoneId): List<AiReminderDraft> {
@@ -144,7 +204,7 @@ internal object AiDraftParser {
                 }
                 "RELATIVE" -> {
                     val minutes = when (val raw = record.opt("minutesBeforeDue")) {
-                        is Number -> raw.toLong()
+                        is Number -> raw.toLong().takeIf { raw.toDouble() == it.toDouble() }
                         is String -> raw.toLongOrNull()
                         else -> null
                     }

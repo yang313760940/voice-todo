@@ -28,7 +28,15 @@ class OpenAiCompatibleClient(
         text: String,
         context: AiPromptContext,
         settings: AiSettings,
-    ): AiDraft = withContext(Dispatchers.IO) {
+    ): AiDraft {
+        val drafts = organizeDrafts(text, context, settings)
+        if (drafts.size != 1) throw AiAssistException("AI 返回了多个草稿，请使用批量核对入口")
+        return drafts.single()
+    }
+
+    override suspend fun organizeDrafts(
+        text: String, context: AiPromptContext, settings: AiSettings,
+    ): List<AiDraft> = withContext(Dispatchers.IO) {
         val clean = settings.validate()
         val body = requestBody(clean, text, context).toString().toByteArray(Charsets.UTF_8)
         val connection = try {
@@ -65,7 +73,7 @@ class OpenAiCompatibleClient(
             } catch (e: JSONException) {
                 throw AiAssistException("AI 返回结构不符合 OpenAI 兼容格式；文字已保留，可手动创建", e)
             }
-            AiDraftParser.parse(content, text, context.zoneId)
+            AiDraftParser.parseDrafts(content, text, context.zoneId)
         } catch (e: AiAssistException) {
             throw e
         } catch (e: SocketTimeoutException) {
@@ -107,8 +115,8 @@ class OpenAiCompatibleClient(
 
     private companion object {
         val SYSTEM_PROMPT = """
-            你是待办事项整理器。只输出一个 JSON 对象，不要 Markdown、不要解释。
-            字段：
+            你是待办事项整理器。只输出一个 JSON 对象 {"drafts":[草稿, ...]}，不要 Markdown、不要解释。
+            每件事独立生成一条草稿，不要将多个事项合并为一个。每条草稿字段：
             - title：字符串，必填，简洁的事项名称。
             - plannedDate："yyyy-MM-dd" 或 null。用户计划哪天处理；它本身不产生提醒。
             - dueAt："yyyy-MM-dd HH:mm" 或 null。最晚完成时刻。
@@ -118,8 +126,12 @@ class OpenAiCompatibleClient(
             - quadrant："IMPORTANT_URGENT"、"IMPORTANT_NOT_URGENT"、"NOT_IMPORTANT_URGENT"、
               "NOT_IMPORTANT_NOT_URGENT" 之一，只是建议。
             - clarification：字符串或 null。时间含糊、缺少关键信息时必须说明，不要猜测。
+            - recurrence：null 或重复规则对象：
+              {"frequency":"DAILY"}，或 {"frequency":"WEEKLY","weekdays":[1,3,5]}，
+              或 {"frequency":"MONTHLY","monthDay":31}。星期一=1、星期日=7；工作日=1至5。
+              仅表达用户明确的重复安排，缺少星期/月日期时用 clarification，recurrence 为 null。
             规则：
-            1. 只整理为一个事项；如果文字明显包含多件事，在 clarification 说明本版只生成一条。
+            1. 保留每条事项的独立时间、提醒和重复建议，至少返回一条草稿。
             2. 不要凭空补造日期、截止时间或提醒；含糊时间必须放进 clarification。
             3. “明天买菜”只给 plannedDate，不设置提醒。
             4. 只有用户明确说“提醒我”或给出明确提醒时刻时才生成 reminders。

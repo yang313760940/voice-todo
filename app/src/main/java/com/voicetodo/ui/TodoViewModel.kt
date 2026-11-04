@@ -8,6 +8,7 @@ import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.ai.AiAssistClient
 import com.voicetodo.ai.AiAssistException
 import com.voicetodo.ai.AiDraft
+import com.voicetodo.ai.AiRecurrenceDraft
 import com.voicetodo.ai.AiPromptContext
 import com.voicetodo.ai.AiReminderDraft
 import com.voicetodo.ai.AiReminderKind
@@ -18,6 +19,8 @@ import com.voicetodo.ai.OpenAiCompatibleClient
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.domain.TodoEdit
+import com.voicetodo.domain.TodoDraftInput
+import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.ReminderEdit
 import com.voicetodo.domain.Quadrant
@@ -146,10 +149,14 @@ data class UiState(
     val capabilities: ReminderCapabilities? = null,
     val aiConfigured: Boolean = false,
     val aiSettingsForm: AiSettingsForm? = null,
-    val aiDraft: AiDraft? = null,
+    val aiDrafts: List<AiDraft> = emptyList(),
+    val selectedAiDraftId: String? = null,
     val aiBusy: Boolean = false,
     val aiError: String? = null,
-)
+) {
+    val aiDraft: AiDraft?
+        get() = aiDrafts.firstOrNull { it.itemId == selectedAiDraftId } ?: aiDrafts.firstOrNull()
+}
 
 /**
  * 单页待办 ViewModel：录音 → 离线转写 → 可编辑标题 → 手选时间 → 保存/取消。
@@ -515,13 +522,17 @@ class TodoViewModel @JvmOverloads constructor(
         _state.value = current.copy(aiBusy = true, aiError = null, inputError = null, message = null)
         aiJob = viewModelScope.launch {
             try {
-                val draft = aiClient.organize(
+                val drafts = aiClient.organizeDrafts(
                     source,
                     AiPromptContext(now = clock.now(), zoneId = zoneId),
                     settings,
                 )
+                require(drafts.isNotEmpty()) { "AI 没有返回事项草稿；文字已保留" }
+                require(drafts.map { it.itemId }.distinct().size == drafts.size) { "AI 草稿身份重复" }
                 if (generation == aiGeneration) {
-                    _state.value = _state.value.copy(aiBusy = false, aiDraft = draft, aiError = null)
+                    _state.value = _state.value.copy(aiBusy = false,
+                        aiDrafts = drafts.map { it.copy(sourceText = source) },
+                        selectedAiDraftId = drafts.first().itemId, aiError = null)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -562,7 +573,43 @@ class TodoViewModel @JvmOverloads constructor(
     private fun updateAiDraft(block: (AiDraft) -> AiDraft) {
         if (_state.value.busy) return
         val draft = _state.value.aiDraft ?: return
-        _state.value = _state.value.copy(aiDraft = block(draft), aiError = null)
+        _state.value = _state.value.copy(aiDrafts = _state.value.aiDrafts.map {
+            if (it.itemId == draft.itemId) block(it) else it
+        }, aiError = null)
+    }
+
+    fun onSelectAiDraft(itemId: String) {
+        if (!_state.value.busy && _state.value.aiDrafts.any { it.itemId == itemId }) {
+            _state.value = _state.value.copy(selectedAiDraftId = itemId, aiError = null)
+        }
+    }
+
+    fun onDeleteAiDraft(itemId: String) {
+        if (_state.value.busy) return
+        val remaining = _state.value.aiDrafts.filter { it.itemId != itemId }
+        _state.value = _state.value.copy(aiDrafts = remaining,
+            selectedAiDraftId = _state.value.selectedAiDraftId.takeIf { id -> remaining.any { it.itemId == id } }
+                ?: remaining.firstOrNull()?.itemId,
+            aiError = null, message = if (remaining.isEmpty()) "已删除全部草稿，文字已保留" else null)
+    }
+
+    fun onAiRecurrenceChange(frequency: RecurrenceFrequency?) = updateAiDraft { draft ->
+        if (draft.recurrence?.frequency == frequency) return@updateAiDraft draft
+        val today = clock.now().atZone(zoneId).toLocalDate()
+        draft.copy(recurrence = frequency?.let { kind ->
+            AiRecurrenceDraft(kind,
+                weekdays = if (kind == RecurrenceFrequency.Weekly) setOf(today.dayOfWeek.value) else emptySet(),
+                monthDay = if (kind == RecurrenceFrequency.Monthly) today.dayOfMonth.toString() else "")
+        })
+    }
+
+    fun onAiRecurrenceWeekdayToggle(day: Int) = updateAiDraft { draft ->
+        val rule = draft.recurrence ?: return@updateAiDraft draft
+        draft.copy(recurrence = rule.copy(weekdays = if (day in rule.weekdays) rule.weekdays - day else rule.weekdays + day))
+    }
+
+    fun onAiRecurrenceMonthDayChange(value: String) = updateAiDraft { draft ->
+        draft.copy(recurrence = draft.recurrence?.copy(monthDay = value))
     }
 
     fun onAddAiReminder(kind: AiReminderKind) = updateAiDraft {
@@ -582,44 +629,42 @@ class TodoViewModel @JvmOverloads constructor(
     fun onCancelAiDraft() {
         if (_state.value.busy) return
         _state.value = _state.value.copy(
-            aiDraft = null,
+            aiDrafts = emptyList(), selectedAiDraftId = null,
             aiError = null,
             message = "已取消 AI 草稿，文字已保留，可继续编辑或手动创建",
         )
     }
 
     fun onConfirmAiDraft() {
-        val draft = _state.value.aiDraft ?: return
-        if (draft.requiresNoReminderAcknowledgement) {
-            _state.value = _state.value.copy(
-                aiError = "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”",
-            )
-            return
-        }
-        val edit = try {
-            draft.toTodoEdit(zoneId)
-        } catch (e: IllegalArgumentException) {
-            _state.value = _state.value.copy(aiError = e.message ?: "草稿字段无效，请检查")
-            return
+        if (_state.value.busy || _state.value.aiDrafts.isEmpty()) return
+        val inputs = mutableListOf<TodoDraftInput>()
+        for ((index, draft) in _state.value.aiDrafts.withIndex()) {
+            try {
+                require(!draft.requiresNoReminderAcknowledgement) {
+                    "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”"
+                }
+                inputs += TodoDraftInput(draft.itemId, draft.toTodoEdit(zoneId), draft.quadrant,
+                    draft.recurrence?.toRule())
+            } catch (e: IllegalArgumentException) {
+                _state.value = _state.value.copy(selectedAiDraftId = draft.itemId,
+                    aiError = "第 ${index + 1} 条：${e.message ?: "草稿字段无效，请检查"}")
+                return
+            }
         }
         action {
-            val result = useCases.confirmDraft(
-                title = edit.title,
-                remindAt = edit.remindAt,
-                plannedDate = edit.plannedDate,
-                dueAt = edit.dueAt,
-                reminders = edit.reminders.orEmpty(),
-                quadrant = draft.quadrant,
-                itemId = draft.itemId,
-            )
+            val results = useCases.confirmDrafts(inputs)
             _state.value = _state.value.copy(
-                aiDraft = null,
+                aiDrafts = emptyList(), selectedAiDraftId = null,
                 aiError = null,
                 draftText = "",
                 draftHasTime = false,
                 draftTime = null,
                 inputError = null,
-                message = outcomeMessage(result.outcome),
+                message = "已保存 ${results.size} 条事项。" + when {
+                    results.any { it.outcome == ReminderOutcome.NotReady } -> "部分提醒未就绪，请检查权限后重试"
+                    results.any { it.outcome == ReminderOutcome.Scheduled } -> "已安排明确设置的提醒"
+                    else -> "未设置提醒"
+                },
             )
             reload()
         }

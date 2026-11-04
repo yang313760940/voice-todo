@@ -8,6 +8,12 @@ interface TodoRepository {
     suspend fun all(): List<TodoItem>
     /** 保存（新增或覆盖）。 */
     suspend fun save(item: TodoItem)
+    /** 原子插入草稿集合；已有身份返回原事项，绝不覆盖或部分保存。 */
+    suspend fun insertDrafts(items: List<TodoItem>): List<TodoItem> {
+        require(items.size == 1) { "此存储不支持批量原子保存" }
+        val item = items.single()
+        return listOf(findById(item.id) ?: item.also { save(it) })
+    }
     /** 按 id 查找。 */
     suspend fun findById(id: String): TodoItem?
     /** 删除。 */

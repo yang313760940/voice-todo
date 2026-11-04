@@ -41,6 +41,13 @@ data class UpdateResult(
     val outcome: ReminderOutcome?,
 )
 
+data class TodoDraftInput(
+    val itemId: String,
+    val edit: TodoEdit,
+    val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    val recurrence: RecurrenceRule? = null,
+)
+
 /**
  * 统一用例入口（应用层 seam）。界面通过它读取列表和提交用户操作；
  * 失败（空标题、过去时刻）抛 [IllegalArgumentException]，调用方在保存前拦截。
@@ -54,6 +61,41 @@ class TodoUseCases(
     private val clock: Clock,
 ) {
     private val mutations = Mutex()
+    /** 全部校验 → 一个数据库事务 → 系统调度。重试使用同一草稿身份。 */
+    suspend fun confirmDrafts(drafts: List<TodoDraftInput>): List<ConfirmResult> = mutations.withLock {
+        require(drafts.isNotEmpty()) { "请至少保留一条草稿" }
+        require(drafts.map { it.itemId }.distinct().size == drafts.size) { "草稿身份不能重复" }
+        val now = clock.now()
+        val items = drafts.map { draft ->
+            require(draft.itemId.isNotBlank()) { "草稿身份不能为空" }
+            repo.findById(draft.itemId)?.let { return@map it }
+            val edit = draft.edit
+            val title = edit.title.trim()
+            require(title.isNotEmpty()) { "标题不能为空" }
+            val rules = edit.reminders.orEmpty().ifEmpty {
+                edit.remindAt?.let { listOf(ReminderEdit(id = draft.itemId, at = it)) }.orEmpty()
+            }
+            validateReminderRules(rules)
+            val reminders = rules.map { rule ->
+                val at = resolveReminderTime(rule, edit.dueAt)
+                require(at.isAfter(now)) { "提醒时间必须晚于当前时间" }
+                TodoReminder(rule.id, at, rule.beforeDue)
+            }
+            TodoItem(id = draft.itemId, title = title, plannedDate = edit.plannedDate,
+                dueAt = edit.dueAt, remindAt = reminders.firstOrNull()?.at, reminders = reminders,
+                createdAt = now, quadrant = draft.quadrant, recurrence = draft.recurrence?.validate())
+        }
+        val saved = repo.insertDrafts(items)
+        saved.map { item ->
+            // 已保存/完成的事项不会被重复确认改写；只有未就绪提醒可重试。
+            if (item.completedAt != null || item.reminders.none { it.outcome == ReminderOutcome.NotReady }) {
+                ConfirmResult(item, outcomeFor(item))
+            } else {
+                val (scheduled, outcome) = scheduleMultiple(item)
+                ConfirmResult(scheduled, outcome)
+            }
+        }
+    }
     suspend fun listItems(): List<TodoItem> = repo.all()
     suspend fun listIncomplete(): List<TodoItem> = repo.incomplete()
     suspend fun listCompleted(): List<TodoItem> = repo.completed()
@@ -107,21 +149,13 @@ class TodoUseCases(
     private suspend fun updateMultiple(
         item: TodoItem, title: String, edit: TodoEdit, rules: List<ReminderEdit>,
     ): UpdateResult {
-        require(rules.map { it.id }.distinct().size == rules.size) { "同一事项的提醒身份不能重复" }
-        rules.forEach {
-            require(it.id.isNotBlank()) { "提醒身份不能为空" }
-            require((it.at == null) != (it.beforeDue == null)) { "请选择一种提醒：指定时刻或相对截止" }
-            it.beforeDue?.let { offset ->
-                require(!offset.isNegative && !offset.isZero) { "提前时长必须大于零" }
-            }
-        }
+        validateReminderRules(rules)
         val oldReminders = if (item.reminders.isNotEmpty()) item.reminders else item.remindAt?.let {
             listOf(TodoReminder(item.id, it, revision = item.reminderRevision))
         }.orEmpty()
         val nextRevision = item.reminderRevision + 1
         val reminders = rules.map { rule ->
-            val at = rule.at ?: requireNotNull(edit.dueAt) { "相对提醒需要截止时间" }
-                .minus(requireNotNull(rule.beforeDue) { "请选择指定时刻或相对提醒" })
+            val at = resolveReminderTime(rule, edit.dueAt)
             val old = oldReminders.firstOrNull { it.id == rule.id }
             if (old != null && old.at == at && old.beforeDue == rule.beforeDue) old
             else TodoReminder(rule.id, at, rule.beforeDue, revision = nextRevision)
@@ -150,8 +184,12 @@ class TodoUseCases(
         val reminders = item.reminders.map { reminder ->
             if (reminder.outcome != ReminderOutcome.NotReady || reminder.deliveredAt != null ||
                 !reminder.at.isAfter(clock.now())) reminder else reminder.copy(
-                outcome = if (scheduler.scheduleReminder(item.id, item.title, reminder.id, reminder.at,
-                        reminder.revision)) ReminderOutcome.Scheduled else ReminderOutcome.NotReady)
+                outcome = if (try {
+                    scheduler.scheduleReminder(item.id, item.title, reminder.id, reminder.at, reminder.revision)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    false
+                }) ReminderOutcome.Scheduled else ReminderOutcome.NotReady)
         }
         val scheduled = item.copy(reminders = reminders)
         repo.save(scheduled)
@@ -212,20 +250,10 @@ class TodoUseCases(
         }
 
         if (reminders.isNotEmpty()) {
-            require(reminders.map { it.id }.distinct().size == reminders.size) {
-                "同一事项的提醒身份不能重复"
-            }
+            validateReminderRules(reminders)
             val now = clock.now()
             val normalized = reminders.map { rule ->
-                require(rule.id.isNotBlank()) { "提醒身份不能为空" }
-                require((rule.at == null) != (rule.beforeDue == null)) {
-                    "请选择一种提醒：指定时刻或相对截止"
-                }
-                rule.beforeDue?.let { offset ->
-                    require(!offset.isNegative && !offset.isZero) { "提前时长必须大于零" }
-                }
-                val at = rule.at ?: requireNotNull(dueAt) { "相对提醒需要截止时间" }
-                    .minus(requireNotNull(rule.beforeDue))
+                val at = resolveReminderTime(rule, dueAt)
                 require(at.isAfter(now)) { "提醒时间必须晚于当前时间" }
                 TodoReminder(rule.id, at, rule.beforeDue)
             }
@@ -274,6 +302,19 @@ class TodoUseCases(
             ReminderOutcome.NotReady
         else -> ReminderOutcome.Scheduled
     }
+
+    private fun validateReminderRules(rules: List<ReminderEdit>) {
+        require(rules.map { it.id }.distinct().size == rules.size) { "同一事项的提醒身份不能重复" }
+        rules.forEach { rule ->
+            require(rule.id.isNotBlank()) { "提醒身份不能为空" }
+            require((rule.at == null) != (rule.beforeDue == null)) { "请选择一种提醒：指定时刻或相对截止" }
+            rule.beforeDue?.let { require(!it.isNegative && !it.isZero) { "提前时长必须大于零" } }
+        }
+    }
+
+    private fun resolveReminderTime(rule: ReminderEdit, dueAt: Instant?): Instant =
+        rule.at ?: requireNotNull(dueAt) { "相对提醒需要截止时间" }
+            .minus(requireNotNull(rule.beforeDue) { "请选择指定时刻或相对提醒" })
 
     /** 用户取消确认：不创建事项、不调度。 */
     fun cancelDraft() {

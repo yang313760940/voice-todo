@@ -36,6 +36,7 @@ import com.voicetodo.ai.AiDraft
 import com.voicetodo.ai.AiReminderDraft
 import com.voicetodo.ai.AiReminderKind
 import com.voicetodo.domain.Quadrant
+import com.voicetodo.domain.RecurrenceFrequency
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -180,6 +181,16 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
                 }
             }
         }
+        itemsIndexed(state.aiDrafts, key = { _, candidate -> candidate.itemId }) { index, candidate ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { vm.onSelectAiDraft(candidate.itemId) }, enabled = enabled,
+                    modifier = Modifier.weight(1f).testTag("ai_select_draft_$index")) {
+                    Text("${if (candidate.itemId == draft.itemId) "正在核对 · " else ""}${index + 1}. ${candidate.title}")
+                }
+                TextButton(onClick = { vm.onDeleteAiDraft(candidate.itemId) }, enabled = enabled,
+                    modifier = Modifier.testTag("ai_delete_draft_$index")) { Text("删除") }
+            }
+        }
         draft.clarification?.let { clarification ->
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -265,6 +276,42 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
                     vm::onAiDraftQuadrantChange, Modifier.weight(1f))
             }
         }
+        item {
+            Text("重复建议（你可以改）", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val choices = listOf(null to "不重复", RecurrenceFrequency.Daily to "每天",
+                    RecurrenceFrequency.Weekly to "每周", RecurrenceFrequency.Monthly to "每月")
+                choices.forEach { (frequency, label) ->
+                    FilterChip(selected = draft.recurrence?.frequency == frequency,
+                        onClick = { vm.onAiRecurrenceChange(frequency) }, enabled = enabled,
+                        label = { Text(label) }, modifier = Modifier.testTag("ai_recurrence_${frequency?.name ?: "None"}"))
+                }
+            }
+            if (draft.recurrence?.frequency == RecurrenceFrequency.Weekly) {
+                // 分两行，避免字体放大时七个星期选项挤出屏幕。
+                listOf((1..4).toList(), (5..7).toList()).forEach { days ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        days.forEach { day ->
+                            FilterChip(selected = day in draft.recurrence.weekdays,
+                                onClick = { vm.onAiRecurrenceWeekdayToggle(day) }, enabled = enabled,
+                                label = { Text(listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")[day - 1]) },
+                                modifier = Modifier.testTag("ai_recurrence_day_$day"))
+                        }
+                    }
+                }
+            }
+            if (draft.recurrence?.frequency == RecurrenceFrequency.Monthly) {
+                OutlinedTextField(value = draft.recurrence.monthDay,
+                    onValueChange = vm::onAiRecurrenceMonthDayChange, enabled = enabled,
+                    label = { Text("每月几日（1—31，短月取末日）") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("ai_recurrence_month_day"))
+            }
+            if (draft.recurrence != null) {
+                Text("重复规则将保留。后续实例功能尚未就绪，目前只安排你明确填写的提醒。",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
         if (draft.clarification != null && !draft.hasUsableReminder) {
             item {
                 Row(
@@ -294,11 +341,12 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
         item {
             Button(
                 onClick = vm::onConfirmAiDraft,
-                enabled = enabled && draft.title.isNotBlank() &&
-                    !draft.requiresNoReminderAcknowledgement,
+                enabled = enabled && state.aiDrafts.isNotEmpty() && state.aiDrafts.all {
+                    it.title.isNotBlank() && !it.requiresNoReminderAcknowledgement
+                },
                 modifier = Modifier.fillMaxWidth().testTag("ai_draft_confirm_button"),
             ) {
-                Text(if (state.busy) "正在创建…" else "确认并创建事项")
+                Text(if (state.busy) "正在创建…" else "确认并创建全部 ${state.aiDrafts.size} 条事项")
             }
             TextButton(onClick = vm::onCancelAiDraft, enabled = enabled,
                 modifier = Modifier.testTag("ai_draft_cancel_button")) {

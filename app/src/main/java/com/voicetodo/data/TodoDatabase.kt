@@ -4,6 +4,8 @@ import androidx.room.*
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoReminder
 import com.voicetodo.domain.Quadrant
+import com.voicetodo.domain.RecurrenceRule
+import com.voicetodo.domain.RecurrenceFrequency
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -24,6 +26,7 @@ data class TodoEntity(
     @ColumnInfo(defaultValue = "'[]'") val reminders: List<TodoReminder> = emptyList(),
     @ColumnInfo(defaultValue = "'NotImportantNotUrgent'")
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    @ColumnInfo(defaultValue = "NULL") val recurrence: RecurrenceRule? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -36,6 +39,7 @@ data class TodoEntity(
         reminderRevision = reminderRevision,
         reminders = reminders,
         quadrant = quadrant,
+        recurrence = recurrence,
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -49,6 +53,7 @@ data class TodoEntity(
             reminderRevision = item.reminderRevision,
             reminders = item.reminders,
             quadrant = item.quadrant,
+            recurrence = item.recurrence,
         )
     }
 }
@@ -66,6 +71,18 @@ data class ReminderDeliveryEntity(val itemId: String, val reminderId: String, va
 data class StorageMigration(@PrimaryKey val name: String)
 
 class TimeConverters {
+    @TypeConverter fun recurrence(value: String?): RecurrenceRule? = value?.let {
+        val json = JSONObject(it)
+        val days = json.getJSONArray("weekdays")
+        RecurrenceRule(RecurrenceFrequency.valueOf(json.getString("frequency")),
+            (0 until days.length()).map { index -> days.getInt(index) }.toSet(),
+            if (json.isNull("monthDay")) null else json.getInt("monthDay")).validate()
+    }
+    @TypeConverter fun recurrenceText(value: RecurrenceRule?): String? = value?.let {
+        JSONObject().put("frequency", it.frequency.name)
+            .put("weekdays", JSONArray(it.weekdays.sorted()))
+            .put("monthDay", it.monthDay ?: JSONObject.NULL).toString()
+    }
     // Fixed precision preserves nanoseconds and makes UTC text ordering chronological.
     private val instantFormat = DateTimeFormatterBuilder().appendInstant(9).toFormatter()
     @TypeConverter fun instant(value: String?): Instant? = value?.let(Instant::parse)
@@ -119,8 +136,9 @@ interface TodoDao {
     @Insert suspend fun migrated(record: StorageMigration)
 }
 
-@Database(entities = [TodoEntity::class, DeliveryEntity::class, ReminderDeliveryEntity::class, StorageMigration::class], version = 3,
-    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)], exportSchema = true)
+@Database(entities = [TodoEntity::class, DeliveryEntity::class, ReminderDeliveryEntity::class, StorageMigration::class], version = 4,
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3),
+        AutoMigration(from = 3, to = 4)], exportSchema = true)
 @TypeConverters(TimeConverters::class)
 abstract class TodoDatabase : RoomDatabase() {
     abstract fun todos(): TodoDao

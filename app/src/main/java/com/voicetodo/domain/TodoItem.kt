@@ -5,7 +5,7 @@ import java.time.LocalDate
 import java.util.UUID
 
 /**
- * 一条待办事项（本切片只支持单条、非重复）。
+ * 一条待办事项，可保留用户确认的重复建议。
  *
  * 术语见 GLOSSARY.md：事项与提醒相互独立；事项可以不设置提醒，计划日期、截止时间与提醒也相互独立。
  */
@@ -29,6 +29,7 @@ data class TodoItem(
     val reminders: List<TodoReminder> = emptyList(),
     /** 四象限分类；手动创建默认“不重要不紧急”，AI 建议可在确认前修改。 */
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    val recurrence: RecurrenceRule? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */

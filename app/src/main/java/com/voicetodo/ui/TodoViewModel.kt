@@ -611,6 +611,7 @@ class TodoViewModel @JvmOverloads constructor(
                 reminders = edit.reminders.orEmpty(),
                 quadrant = draft.quadrant,
                 itemId = draft.itemId,
+                suggestedQuadrant = draft.suggestedQuadrant,
             )
             _state.value = _state.value.copy(
                 aiDraft = null,
@@ -630,6 +631,13 @@ class TodoViewModel @JvmOverloads constructor(
             useCases.deleteItem(id)
             reload()
         }
+    }
+
+    /** 四象限移动只改分类；提醒、截止、计划日期与清单均保持不变。 */
+    fun onMoveQuadrant(id: String, quadrant: Quadrant) = action {
+        useCases.moveToQuadrant(id, quadrant)
+        _state.value = _state.value.copy(message = "已移到「${quadrant.label}」")
+        reload()
     }
 
     fun onOpenDetail(id: String) = action {

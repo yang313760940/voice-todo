@@ -346,6 +346,8 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
     Card(modifier = Modifier.fillMaxWidth().testTag(tag).clickable(enabled = enabled, onClick = onOpen)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(item.title, fontWeight = FontWeight.Medium)
+            Text("象限：${item.quadrant.label}", style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("todo_quadrant_${item.id}"))
             item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
             item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
             if (item.reminders.isEmpty()) {

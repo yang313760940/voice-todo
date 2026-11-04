@@ -29,6 +29,8 @@ data class TodoItem(
     val reminders: List<TodoReminder> = emptyList(),
     /** 四象限分类；手动创建默认“不重要不紧急”，AI 建议可在确认前修改。 */
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    /** AI 给出的初始建议；只用于展示，不随用户移动象限而改变。 */
+    val suggestedQuadrant: Quadrant? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */

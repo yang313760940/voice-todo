@@ -6,6 +6,7 @@ import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -47,6 +48,7 @@ class AiDraftParserTest {
         assertEquals(AiReminderKind.Relative, draft.reminders[1].kind)
         assertEquals("60", draft.reminders[1].value)
         assertEquals(Quadrant.ImportantUrgent, draft.quadrant)
+        assertEquals(Quadrant.ImportantUrgent, draft.suggestedQuadrant)
         assertEquals("明天下午交报告", draft.sourceText)
         assertFalse(draft.requiresNoReminderAcknowledgement)
 
@@ -66,6 +68,7 @@ class AiDraftParserTest {
         )
 
         assertTrue(draft.requiresNoReminderAcknowledgement)
+        assertNull("模型未给出象限时不虚构建议", draft.suggestedQuadrant)
         assertFalse(draft.copy(noReminderAcknowledged = true).requiresNoReminderAcknowledgement)
         val edit = draft.toTodoEdit(zone)
         assertEquals(null, edit.plannedDate)

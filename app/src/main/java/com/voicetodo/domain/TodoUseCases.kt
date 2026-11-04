@@ -202,6 +202,7 @@ class TodoUseCases(
         reminders: List<ReminderEdit> = emptyList(),
         quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
         itemId: String = UUID.randomUUID().toString(),
+        suggestedQuadrant: Quadrant? = null,
     ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
@@ -238,6 +239,7 @@ class TodoUseCases(
                 createdAt = now,
                 reminders = normalized,
                 quadrant = quadrant,
+                suggestedQuadrant = suggestedQuadrant,
             )
             repo.save(item)
             val (scheduled, outcome) = scheduleMultiple(item)
@@ -254,6 +256,7 @@ class TodoUseCases(
             dueAt = dueAt,
             createdAt = clock.now(),
             quadrant = quadrant,
+            suggestedQuadrant = suggestedQuadrant,
         )
         repo.save(item)
         // 调度失败（缺权限/系统拒绝）不抛异常、不回滚事项，但如实返回 NotReady。
@@ -265,6 +268,19 @@ class TodoUseCases(
             ReminderOutcome.NotReady
         }
         ConfirmResult(item, outcome)
+    }
+
+    /**
+     * 只调整四象限分类：不触碰提醒安排、截止时间、计划日期或清单归属，
+     * 也不请求系统重新调度。用户可以在象限页反复调整。
+     */
+    suspend fun moveToQuadrant(id: String, quadrant: Quadrant): TodoItem = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        require(item.completedAt == null) { "已完成事项不能在四象限中移动" }
+        if (item.quadrant == quadrant) return@withLock item
+        val updated = item.copy(quadrant = quadrant)
+        repo.save(updated)
+        updated
     }
 
     private fun outcomeFor(item: TodoItem): ReminderOutcome = when {

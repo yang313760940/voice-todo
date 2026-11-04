@@ -38,7 +38,9 @@ class RoomReminderUpgradeTest {
             old.version = 1
         }
         val context = ApplicationProvider.getApplicationContext<Application>()
-        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath).build()
+        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath)
+            .addMigrations(TodoDatabase.MIGRATION_3_4)
+            .build()
         try {
             val useCases = TodoUseCases(RoomTodoRepository(db,
                 FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai"))),
@@ -88,7 +90,9 @@ class RoomReminderUpgradeTest {
             old.version = 2
         }
         val context = ApplicationProvider.getApplicationContext<Application>()
-        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath).build()
+        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath)
+            .addMigrations(TodoDatabase.MIGRATION_3_4)
+            .build()
         try {
             val item = TodoUseCases(
                 RoomTodoRepository(

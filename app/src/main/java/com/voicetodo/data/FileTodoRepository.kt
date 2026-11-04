@@ -50,6 +50,9 @@ class FileTodoRepository(
                     quadrant = o.optionalString("quadrant")?.let {
                         runCatching { Quadrant.valueOf(it) }.getOrDefault(Quadrant.NotImportantNotUrgent)
                     } ?: Quadrant.NotImportantNotUrgent,
+                    suggestedQuadrant = o.optionalString("suggestedQuadrant")?.let {
+                        runCatching { Quadrant.valueOf(it) }.getOrNull()
+                    },
                 )
             }
             list
@@ -79,6 +82,7 @@ class FileTodoRepository(
                     put("createdAt", it.createdAt.toString())
                     put("reminderRevision", it.reminderRevision)
                     put("quadrant", it.quadrant.name)
+                    it.suggestedQuadrant?.let { suggested -> put("suggestedQuadrant", suggested.name) }
                 }
             )
         }

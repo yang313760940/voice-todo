@@ -36,6 +36,8 @@ data class AiDraft(
     val dueAt: String = "",
     val reminders: List<AiReminderDraft> = emptyList(),
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    /** AI 的原始建议；用户修改 [quadrant] 时保持不变，确认后只作展示。 */
+    val suggestedQuadrant: Quadrant? = null,
     val clarification: String? = null,
     val noReminderAcknowledged: Boolean = false,
 ) {
@@ -115,7 +117,8 @@ internal object AiDraftParser {
             formatLocal(parseDateTime(it, zoneId, "截止时间"), zoneId)
         }.orEmpty()
         val reminders = parseReminders(json.optJSONArray("reminders"), zoneId)
-        val quadrant = parseQuadrant(optionalText(json, "quadrant"))
+        val quadrantText = optionalText(json, "quadrant")
+        val quadrant = parseQuadrant(quadrantText)
         val clarification = optionalText(json, "clarification")
         return AiDraft(
             sourceText = sourceText,
@@ -124,6 +127,7 @@ internal object AiDraftParser {
             dueAt = dueAt,
             reminders = reminders,
             quadrant = quadrant,
+            suggestedQuadrant = quadrantText?.let { quadrant },
             clarification = clarification,
         )
     }

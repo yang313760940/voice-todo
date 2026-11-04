@@ -26,6 +26,8 @@ data class TodoEntity(
     @ColumnInfo(defaultValue = "'[]'") val reminders: List<TodoReminder> = emptyList(),
     @ColumnInfo(defaultValue = "'NotImportantNotUrgent'")
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    /** AI 的初始建议，只用于展示；用户移动象限后仍保留原建议。 */
+    val suggestedQuadrant: Quadrant? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -38,6 +40,7 @@ data class TodoEntity(
         reminderRevision = reminderRevision,
         reminders = reminders,
         quadrant = quadrant,
+        suggestedQuadrant = suggestedQuadrant,
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -51,6 +54,7 @@ data class TodoEntity(
             reminderRevision = item.reminderRevision,
             reminders = item.reminders,
             quadrant = item.quadrant,
+            suggestedQuadrant = item.suggestedQuadrant,
         )
     }
 }
@@ -130,10 +134,11 @@ interface TodoDao {
         FocusSessionEntity::class,
         FocusSettingsEntity::class,
     ],
-    version = 4,
+    version = 5,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
+        AutoMigration(from = 4, to = 5),
     ],
     exportSchema = true,
 )

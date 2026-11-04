@@ -2,6 +2,8 @@ package com.voicetodo.data
 
 import androidx.room.*
 import com.voicetodo.domain.TodoItem
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatterBuilder
@@ -58,9 +60,21 @@ interface TodoDao {
     @Insert suspend fun migrated(record: StorageMigration)
 }
 
-@Database(entities = [TodoEntity::class, DeliveryEntity::class, StorageMigration::class], version = 1,
+@Database(entities = [TodoEntity::class, DeliveryEntity::class, StorageMigration::class,
+    FocusSessionEntity::class, FocusSettingsEntity::class], version = 2,
     exportSchema = true)
 @TypeConverters(TimeConverters::class)
 abstract class TodoDatabase : RoomDatabase() {
     abstract fun todos(): TodoDao
+    abstract fun focus(): FocusDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `focus_sessions` (`id` TEXT NOT NULL, `phase` TEXT NOT NULL, `startedAt` TEXT NOT NULL, `endsAt` TEXT NOT NULL, `lastResumedAt` TEXT NOT NULL, `durationSeconds` INTEGER NOT NULL, `pausedAt` TEXT, `accumulatedFocusSeconds` INTEGER NOT NULL, `completedPomodoros` INTEGER NOT NULL, `itemId` TEXT, `state` TEXT NOT NULL, `endedAt` TEXT, PRIMARY KEY(`id`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `focus_settings` (`id` INTEGER NOT NULL, `focusMinutes` INTEGER NOT NULL, `shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, `longBreakEvery` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("INSERT INTO focus_settings (id, focusMinutes, shortBreakMinutes, longBreakMinutes, longBreakEvery) VALUES (1, 25, 5, 15, 4)")
+            }
+        }
+    }
 }

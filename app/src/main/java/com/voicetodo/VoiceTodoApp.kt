@@ -9,12 +9,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.voicetodo.alarm.SystemReminderScheduler
+import com.voicetodo.alarm.SystemFocusScheduler
 import com.voicetodo.data.FileTodoRepository
 import androidx.room.Room
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.TodoDatabase
+import com.voicetodo.data.RoomFocusRepository
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.domain.FocusUseCases
 import java.time.ZoneId
 
 /**
@@ -29,7 +32,16 @@ class VoiceTodoApp : Application() {
     lateinit var scheduler: SystemReminderScheduler
         private set
 
+    lateinit var focusScheduler: SystemFocusScheduler
+        private set
+
     lateinit var repository: RoomTodoRepository
+        private set
+
+    lateinit var focusRepository: RoomFocusRepository
+        private set
+
+    lateinit var focusUseCases: FocusUseCases
         private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -37,18 +49,25 @@ class VoiceTodoApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels(this)
+        val db = Room.databaseBuilder(this, TodoDatabase::class.java, "todos.db")
+            .addMigrations(TodoDatabase.MIGRATION_1_2)
+            .build()
 
         repository = RoomTodoRepository(
-            Room.databaseBuilder(this, TodoDatabase::class.java, "todos.db").build(),
+            db,
             FileTodoRepository(filesDir, ZoneId.systemDefault()),
         )
+        focusRepository = RoomFocusRepository(db)
         scheduler = SystemReminderScheduler(this)
+        focusScheduler = SystemFocusScheduler(this)
         useCases = TodoUseCases(repository, scheduler, SystemClock())
+        focusUseCases = FocusUseCases(focusRepository, focusScheduler, SystemClock(), repository, ZoneId.systemDefault())
 
         // 冷启动/重开时对账：把仓库中仍有效的未来提醒重新排入系统（幂等）。
         appScope.launch {
             try {
                 useCases.reconcileReminders()
+                focusUseCases.reconcileEnd()
             } catch (e: Exception) {
                 android.util.Log.e("VoiceTodoApp", "Migration/reconcile failed; legacy data retained", e)
             }

@@ -78,6 +78,8 @@ class TodoInputFlowTest {
         })[TodoViewModel::class.java]
         compose.setContent { MaterialTheme { TodoScreen(vm) } }
         waitFor { !vm.state.value.loading }
+        compose.runOnIdle { vm.onOpenAdd() }
+        waitFor { vm.state.value.addOpen }
     }
 
     @After fun teardown() {

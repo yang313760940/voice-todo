@@ -33,6 +33,9 @@ data class TodoEdit(
     val dueAt: Instant?,
     val remindAt: Instant?,
     val reminders: List<ReminderEdit>? = null,
+    val listId: String? = null,
+    /** 只有详情页或显式移动操作设置此标志时才改变归属。 */
+    val updateList: Boolean = false,
 )
 
 data class UpdateResult(
@@ -57,6 +60,7 @@ class TodoUseCases(
     suspend fun listItems(): List<TodoItem> = repo.all()
     suspend fun listIncomplete(): List<TodoItem> = repo.incomplete()
     suspend fun listCompleted(): List<TodoItem> = repo.completed()
+    suspend fun listTodoLists(): List<TodoList> = repo.lists()
     suspend fun findItem(id: String): TodoItem =
         repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
     suspend fun wasDelivered(item: TodoItem): Boolean = if (item.reminders.isEmpty()) {
@@ -84,17 +88,19 @@ class TodoUseCases(
         require(item.completedAt == null) { "已完成事项请先恢复再编辑" }
         val title = edit.title.trim()
         require(title.isNotEmpty()) { "标题不能为空" }
+        val nextListId = if (edit.updateList) edit.listId else item.listId
+        nextListId?.let { require(repo.findListById(it) != null) { "清单不存在" } }
         val rules = edit.reminders ?: item.reminders.takeIf { it.isNotEmpty() }?.map {
             ReminderEdit(it.id, at = if (it.beforeDue == null) it.at else null, beforeDue = it.beforeDue)
         }
-        if (rules != null) return@withLock updateMultiple(item, title, edit, rules)
+        if (rules != null) return@withLock updateMultiple(item.copy(listId = nextListId), title, edit, rules)
         val changed = edit.remindAt != item.remindAt
         if (changed) edit.remindAt?.let {
             require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
         }
         val updated = item.copy(
             title = title, plannedDate = edit.plannedDate, dueAt = edit.dueAt,
-            remindAt = edit.remindAt,
+            remindAt = edit.remindAt, listId = nextListId,
             reminderRevision = item.reminderRevision + if (changed) 1 else 0,
         )
         repo.save(updated)
@@ -102,6 +108,30 @@ class TodoUseCases(
         scheduler.cancel(id)
         val outcome = schedule(updated)
         UpdateResult(updated, true, outcome)
+    }
+
+    suspend fun createList(name: String): TodoList = mutations.withLock {
+        val clean = name.trim()
+        require(clean.isNotEmpty()) { "清单名称不能为空" }
+        TodoList(name = clean, createdAt = clock.now()).also { repo.saveList(it) }
+    }
+
+    suspend fun renameList(id: String, name: String): TodoList = mutations.withLock {
+        val existing = repo.findListById(id) ?: throw IllegalArgumentException("清单不存在")
+        val clean = name.trim()
+        require(clean.isNotEmpty()) { "清单名称不能为空" }
+        existing.copy(name = clean).also { repo.saveList(it) }
+    }
+
+    suspend fun moveItemToList(itemId: String, listId: String?): TodoItem = mutations.withLock {
+        val item = repo.findById(itemId) ?: throw IllegalArgumentException("事项不存在")
+        listId?.let { require(repo.findListById(it) != null) { "清单不存在" } }
+        item.copy(listId = listId).also { repo.save(it) }
+    }
+
+    suspend fun deleteList(id: String) = mutations.withLock {
+        require(repo.findListById(id) != null) { "清单不存在" }
+        repo.deleteList(id)
     }
 
     private suspend fun updateMultiple(
@@ -203,9 +233,11 @@ class TodoUseCases(
         quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
         itemId: String = UUID.randomUUID().toString(),
         suggestedQuadrant: Quadrant? = null,
+        listId: String? = null,
     ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
+        listId?.let { require(repo.findListById(it) != null) { "清单不存在" } }
 
         // 同一草稿重复确认时返回已创建事项，不再保存或重复排闹钟。
         repo.findById(itemId)?.let { existing ->
@@ -240,6 +272,7 @@ class TodoUseCases(
                 reminders = normalized,
                 quadrant = quadrant,
                 suggestedQuadrant = suggestedQuadrant,
+                listId = listId,
             )
             repo.save(item)
             val (scheduled, outcome) = scheduleMultiple(item)
@@ -257,6 +290,7 @@ class TodoUseCases(
             createdAt = clock.now(),
             quadrant = quadrant,
             suggestedQuadrant = suggestedQuadrant,
+            listId = listId,
         )
         repo.save(item)
         // 调度失败（缺权限/系统拒绝）不抛异常、不回滚事项，但如实返回 NotReady。

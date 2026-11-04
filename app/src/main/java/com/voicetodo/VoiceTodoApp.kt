@@ -50,7 +50,7 @@ class VoiceTodoApp : Application() {
         super.onCreate()
         createNotificationChannels(this)
         val db = Room.databaseBuilder(this, TodoDatabase::class.java, "todos.db")
-            .addMigrations(TodoDatabase.MIGRATION_3_4)
+            .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
             .build()
 
         repository = RoomTodoRepository(

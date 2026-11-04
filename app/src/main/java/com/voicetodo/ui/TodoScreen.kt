@@ -7,6 +7,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,13 +22,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.TodoList
+import com.voicetodo.domain.TodoView
 import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.isOverdue
+import com.voicetodo.domain.itemsForView
+import com.voicetodo.domain.supportsUnscheduledFilter
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 internal val timeFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
@@ -35,12 +44,14 @@ fun TodoScreen(vm: TodoViewModel) {
         vm.onRefresh()
         onPauseOrDispose { }
     }
-    val modalOpen = state.aiSettingsForm != null || state.aiDraft != null || state.detail != null
+    val modalOpen = state.aiSettingsForm != null || state.aiDraft != null ||
+        state.detail != null || state.addOpen
     BackHandler(enabled = modalOpen) {
         when {
             state.aiSettingsForm != null -> vm.onCloseAiSettings()
             state.aiDraft != null -> vm.onCancelAiDraft()
-            else -> vm.onCancelDetail()
+            state.detail != null -> vm.onCancelDetail()
+            state.addOpen -> vm.onCloseAdd()
         }
     }
     val baseEnabled = !state.loading && !state.busy && state.storageError == null
@@ -58,6 +69,295 @@ fun TodoScreen(vm: TodoViewModel) {
         DetailScreen(vm, state, detail, enabled)
         return
     }
+    if (state.addOpen) {
+        AddTodoScreen(vm, state, enabled)
+        return
+    }
+    TodoHomeScreen(vm, state, enabled)
+}
+
+@Composable
+private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
+    val visible = itemsForView(
+        state.items + state.completedItems,
+        state.selectedView,
+        state.now,
+        vm.zoneId,
+        state.unscheduledOnly,
+    )
+    var viewMenuOpen by remember { mutableStateOf(false) }
+    var showCreateList by remember { mutableStateOf(false) }
+    var showManageLists by remember { mutableStateOf(false) }
+    val today = state.now.atZone(vm.zoneId).toLocalDate()
+    val title = viewTitle(state.selectedView, state.todoLists)
+    val emptyText = emptyViewText(state.selectedView)
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.testTag("view_title"))
+                    Text(
+                        if (state.selectedView == TodoView.Today) {
+                            today.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA))
+                        } else "${visible.size} 项",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Box {
+                    TextButton(onClick = { viewMenuOpen = true },
+                        modifier = Modifier.testTag("view_selector")) {
+                        Text("切换视图")
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(
+                        expanded = viewMenuOpen,
+                        onDismissRequest = { viewMenuOpen = false },
+                        modifier = Modifier.testTag("view_menu"),
+                    ) {
+                        ViewMenuItem("今天", "view_today", state.selectedView == TodoView.Today) {
+                            vm.onSelectView(TodoView.Today); viewMenuOpen = false
+                        }
+                        ViewMenuItem("收集箱", "view_inbox", state.selectedView == TodoView.Inbox) {
+                            vm.onSelectView(TodoView.Inbox); viewMenuOpen = false
+                        }
+                        ViewMenuItem("最近七天", "view_recent7", state.selectedView == TodoView.RecentSevenDays) {
+                            vm.onSelectView(TodoView.RecentSevenDays); viewMenuOpen = false
+                        }
+                        ViewMenuItem("全部", "view_all", state.selectedView == TodoView.All) {
+                            vm.onSelectView(TodoView.All); viewMenuOpen = false
+                        }
+                        ViewMenuItem("已完成", "view_completed", state.selectedView == TodoView.Completed) {
+                            vm.onSelectView(TodoView.Completed); viewMenuOpen = false
+                        }
+                        if (state.todoLists.isNotEmpty()) {
+                            HorizontalDivider()
+                            state.todoLists.forEach { list ->
+                                ViewMenuItem(
+                                    list.name,
+                                    "view_list_${list.id}",
+                                    state.selectedView == TodoView.CustomList(list.id),
+                                ) {
+                                    vm.onSelectView(TodoView.CustomList(list.id)); viewMenuOpen = false
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("新建清单") },
+                            onClick = { showCreateList = true; viewMenuOpen = false },
+                            modifier = Modifier.testTag("view_create_list"),
+                        )
+                        DropdownMenuItem(
+                            text = { Text("管理清单") },
+                            onClick = { showManageLists = true; viewMenuOpen = false },
+                            enabled = state.todoLists.isNotEmpty(),
+                            modifier = Modifier.testTag("view_manage_lists"),
+                        )
+                    }
+                }
+            }
+        }
+        item { StorageStatus(state, vm::onRetryStorage) }
+        if (showCreateList) {
+            item {
+                CreateListPanel(
+                    onCreate = { vm.onCreateList(it); showCreateList = false },
+                    onDismiss = { showCreateList = false },
+                )
+            }
+        }
+        if (showManageLists) {
+            item {
+                ManageListsPanel(
+                    lists = state.todoLists,
+                    onRename = { id, name -> vm.onRenameList(id, name) },
+                    onDelete = { vm.onDeleteList(it) },
+                    onDismiss = { showManageLists = false },
+                )
+            }
+        }
+        item {
+            Button(
+                onClick = { vm.onOpenAdd(startVoice = true) },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().height(56.dp).testTag("voice_add_button"),
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("语音添加事项")
+            }
+            OutlinedButton(
+                onClick = { vm.onOpenAdd(startVoice = false) },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("text_add_button"),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("文字添加")
+            }
+        }
+        if (state.selectedView.supportsUnscheduledFilter) {
+            item {
+                FilterChip(
+                    selected = state.unscheduledOnly,
+                    onClick = vm::onToggleUnscheduledFilter,
+                    label = { Text("仅未安排时间") },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("unscheduled_filter"),
+                )
+            }
+        }
+        item {
+            InputError(state.inputError)
+            Message(state.message)
+            HorizontalDivider()
+            Text("${visible.size} 项", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.testTag("view_count"))
+        }
+        if (visible.isEmpty()) {
+            item { Text(emptyText, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("empty_view")) }
+        }
+        itemsIndexed(visible, key = { _, item -> item.id }) { index, item ->
+            val completed = state.selectedView == TodoView.Completed
+            ItemRow(
+                item = item,
+                state = state,
+                zone = vm.zoneId,
+                tag = if (completed) "completed_row_$index" else "item_row_$index",
+                enabled = enabled,
+                onOpen = { vm.onOpenDetail(item.id) },
+                onAction = { if (completed) vm.onRestore(item.id) else vm.onComplete(item.id) },
+                onDelete = { vm.onDelete(item.id) },
+                onRetry = { vm.onRetryReminders(item.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ViewMenuItem(label: String, tag: String, selected: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        onClick = onClick,
+        trailingIcon = { if (selected) Text("当前", style = MaterialTheme.typography.labelSmall) },
+        modifier = Modifier.testTag(tag),
+    )
+}
+
+private fun viewTitle(view: TodoView, lists: List<TodoList>): String = when (view) {
+    TodoView.Today -> "今天"
+    TodoView.Inbox -> "收集箱"
+    TodoView.RecentSevenDays -> "最近七天"
+    TodoView.All -> "全部"
+    TodoView.Completed -> "已完成"
+    is TodoView.CustomList -> lists.firstOrNull { it.id == view.listId }?.name ?: "清单"
+}
+
+private fun emptyViewText(view: TodoView): String = when (view) {
+    TodoView.Today -> "今天没有要处理的事项"
+    TodoView.Inbox -> "收集箱是空的"
+    TodoView.RecentSevenDays -> "最近七天没有安排"
+    TodoView.All -> "还没有未完成事项"
+    TodoView.Completed -> "还没有完成的事项"
+    is TodoView.CustomList -> "这个清单还没有事项"
+}
+
+@Composable
+private fun CreateListPanel(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    Card(Modifier.fillMaxWidth().testTag("create_list_panel")) {
+        Column(Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("新建清单", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("清单名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("new_list_name"),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { onCreate(name.trim()) },
+                    enabled = name.isNotBlank(),
+                    modifier = Modifier.testTag("create_list_confirm"),
+                ) { Text("创建") }
+                TextButton(onClick = onDismiss, modifier = Modifier.testTag("create_list_cancel")) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManageListsPanel(
+    lists: List<TodoList>,
+    onRename: (String, String) -> Unit,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var editing by remember { mutableStateOf<TodoList?>(null) }
+    var editName by remember { mutableStateOf("") }
+    Card(Modifier.fillMaxWidth().testTag("manage_lists_panel")) {
+        Column(Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(if (editing == null) "管理清单" else "重命名清单",
+                style = MaterialTheme.typography.titleMedium)
+            if (editing == null) {
+                lists.forEach { list ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(list.name, Modifier.weight(1f))
+                        TextButton(
+                            onClick = { editing = list; editName = list.name },
+                            modifier = Modifier.testTag("rename_list_${list.id}"),
+                        ) { Text("重命名") }
+                        TextButton(
+                            onClick = { onDelete(list.id) },
+                            modifier = Modifier.testTag("delete_list_${list.id}"),
+                        ) { Text("删除") }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.testTag("manage_lists_close")) {
+                    Text("关闭")
+                }
+            } else {
+                OutlinedTextField(
+                    value = editName,
+                    onValueChange = { editName = it },
+                    label = { Text("清单名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("rename_list_name"),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onRename(editing!!.id, editName.trim()); editing = null },
+                        enabled = editName.isNotBlank(),
+                        modifier = Modifier.testTag("rename_list_confirm"),
+                    ) { Text("保存") }
+                    TextButton(
+                        onClick = { editing = null },
+                        modifier = Modifier.testTag("manage_lists_close"),
+                    ) { Text("返回") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
+    val baseEnabled = !state.loading && !state.busy && state.storageError == null
+    val targetName = state.addTargetListId?.let { id ->
+        state.todoLists.firstOrNull { it.id == id }?.name
+    }
     var hourText by remember { mutableStateOf("") }
     var minuteText by remember { mutableStateOf("") }
     LazyColumn(
@@ -66,7 +366,19 @@ fun TodoScreen(vm: TodoViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("语音提醒", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("添加事项", style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = vm::onCloseAdd, enabled = !state.busy,
+                    modifier = Modifier.testTag("add_cancel_button")) { Text("取消") }
+            }
+            Text(
+                if (targetName != null) "将加入清单「$targetName」" else "将加入收集箱",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("add_target"),
+            )
+        }
+        item {
             state.capabilities?.let { cap ->
                 val parts = listOf(
                     if (cap.canScheduleExactAlarm) "精确闹钟 ✓" else "精确闹钟 ✗",
@@ -179,21 +491,6 @@ fun TodoScreen(vm: TodoViewModel) {
         item {
             InputError(state.inputError)
             Message(state.message)
-            HorizontalDivider()
-            Text("待办", style = MaterialTheme.typography.titleMedium)
-        }
-        if (state.items.isEmpty()) item { Text("暂无待办", style = MaterialTheme.typography.bodySmall) }
-        itemsIndexed(state.items, key = { _, item -> "pending-${item.id}" }) { index, item ->
-            ItemRow(item, state, vm.zoneId, "item_row_$index", enabled,
-                onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onComplete(item.id) },
-                onDelete = { vm.onDelete(item.id) }, onRetry = { vm.onRetryReminders(item.id) })
-        }
-        item { HorizontalDivider(); Text("已完成", style = MaterialTheme.typography.titleMedium) }
-        if (state.completedItems.isEmpty()) item { Text("暂无已完成事项", style = MaterialTheme.typography.bodySmall) }
-        itemsIndexed(state.completedItems, key = { _, item -> "completed-${item.id}" }) { index, item ->
-            ItemRow(item, state, vm.zoneId, "completed_row_$index", enabled,
-                onOpen = { vm.onOpenDetail(item.id) }, onAction = { vm.onRestore(item.id) },
-                onDelete = { vm.onDelete(item.id) }, onRetry = { })
         }
     }
 }
@@ -203,6 +500,10 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
     val context = LocalContext.current
     val original = detail.original
     val editable = enabled && original?.completedAt == null
+    var listMenuOpen by remember { mutableStateOf(false) }
+    val listName = detail.listId?.let { id ->
+        state.todoLists.firstOrNull { it.id == id }?.name
+    } ?: "收集箱"
     fun pick(field: DetailField, text: String) {
         val initial = runCatching { LocalDate.parse(text.take(10)) }.getOrElse { state.now.atZone(vm.zoneId).toLocalDate() }
         DatePickerDialog(context, { _, year, month, day ->
@@ -239,6 +540,38 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
             DateField("截止时间", "yyyy-MM-dd HH:mm", detail.dueAt, "dueAt", editable,
                 onChange = { vm.onDetailValueChange(DetailField.Due, it) },
                 onPick = { pick(DetailField.Due, detail.dueAt) })
+        }
+        item {
+            Box {
+                OutlinedButton(
+                    onClick = { listMenuOpen = true },
+                    enabled = editable,
+                    modifier = Modifier.testTag("detail_list_selector"),
+                ) {
+                    Text("清单：$listName")
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                }
+                DropdownMenu(
+                    expanded = listMenuOpen,
+                    onDismissRequest = { listMenuOpen = false },
+                    modifier = Modifier.testTag("detail_list_menu"),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("收集箱") },
+                        onClick = { vm.onDetailListChange(null); listMenuOpen = false },
+                        modifier = Modifier.testTag("detail_list_inbox"),
+                    )
+                    state.todoLists.forEach { list ->
+                        DropdownMenuItem(
+                            text = { Text(list.name) },
+                            onClick = { vm.onDetailListChange(list.id); listMenuOpen = false },
+                            modifier = Modifier.testTag("detail_list_${list.id}"),
+                        )
+                    }
+                }
+            }
+            Text("每个事项只属于一个清单；未选择时进入收集箱。",
+                style = MaterialTheme.typography.bodySmall)
         }
         item { Text("提醒安排", style = MaterialTheme.typography.titleMedium) }
         itemsIndexed(detail.reminders, key = { _, reminder -> reminder.id }) { index, reminder ->
@@ -348,6 +681,12 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
             Text(item.title, fontWeight = FontWeight.Medium)
             Text("象限：${item.quadrant.label}", style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("todo_quadrant_${item.id}"))
+            item.listId?.let { listId ->
+                state.todoLists.firstOrNull { it.id == listId }?.let {
+                    Text("清单：${it.name}", style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("todo_list_name_${item.id}"))
+                }
+            }
             item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
             item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
             if (item.reminders.isEmpty()) {

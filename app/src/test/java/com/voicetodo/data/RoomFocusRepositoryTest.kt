@@ -76,7 +76,7 @@ class RoomFocusRepositoryTest {
             old.version = 3
         }
         val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath)
-            .addMigrations(TodoDatabase.MIGRATION_3_4)
+            .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
             .allowMainThreadQueries()
             .build()
         try {

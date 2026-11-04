@@ -2,6 +2,7 @@ package com.voicetodo.data
 
 import androidx.room.withTransaction
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoRepository
 import com.voicetodo.domain.isCurrentReminder
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,15 @@ class RoomTodoRepository(
     override suspend fun completed() = ready { dao.completed().map { it.item() } }
     override suspend fun findById(id: String) = ready { dao.find(id)?.item() }
     override suspend fun save(item: TodoItem) = ready { dao.save(TodoEntity.from(item)) }
+    override suspend fun lists(): List<TodoList> = ready { dao.lists().map { it.list() } }
+    override suspend fun findListById(id: String) = ready { dao.findList(id)?.list() }
+    override suspend fun saveList(list: TodoList) = ready { dao.saveList(TodoListEntity.from(list)) }
+    override suspend fun deleteList(id: String) = ready {
+        db.withTransaction {
+            dao.clearList(id)
+            dao.deleteList(id)
+        }
+    }
     override suspend fun delete(id: String) = ready {
         db.withTransaction { dao.deleteDeliveries(id); dao.delete(id) }
     }

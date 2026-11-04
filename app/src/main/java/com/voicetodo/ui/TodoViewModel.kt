@@ -16,7 +16,9 @@ import com.voicetodo.ai.AiSettingsStore
 import com.voicetodo.ai.EncryptedAiSettingsStore
 import com.voicetodo.ai.OpenAiCompatibleClient
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.domain.TodoView
 import com.voicetodo.domain.TodoEdit
 import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.ReminderEdit
@@ -84,6 +86,7 @@ data class DetailDraft(
     val dueAt: String,
     val remindAt: String,
     val reminders: List<ReminderDraft>,
+    val listId: String? = null,
 ) {
     fun edit(zone: ZoneId): TodoEdit {
         fun parseTime(text: String, originalTime: Instant?): Instant? {
@@ -104,8 +107,15 @@ data class DetailDraft(
                             ?: throw IllegalArgumentException("相对提醒请输入整数分钟")))
                 }
             }
-            return TodoEdit(title, plannedDate.trim().takeIf { it.isNotEmpty() }?.let(LocalDate::parse),
-                due, reminderEdits.firstOrNull()?.at, reminderEdits)
+            return TodoEdit(
+                title = title,
+                plannedDate = plannedDate.trim().takeIf { it.isNotEmpty() }?.let(LocalDate::parse),
+                dueAt = due,
+                remindAt = reminderEdits.firstOrNull()?.at,
+                reminders = reminderEdits,
+                listId = listId,
+                updateList = true,
+            )
         } catch (e: DateTimeParseException) {
             throw IllegalArgumentException("日期格式：yyyy-MM-dd；时间格式：yyyy-MM-dd HH:mm", e)
         }
@@ -118,10 +128,11 @@ data class DetailDraft(
                 else ReminderDraft(it.id, ReminderDraftKind.Relative, it.beforeDue.toMinutes().toString())
             } else listOf(ReminderDraft(item.id, ReminderDraftKind.Specified, timeText(item.remindAt, zone)))
             return DetailDraft(item, item.title, item.plannedDate?.toString().orEmpty(),
-                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules)
+                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules, item.listId)
         }
-        fun forCreation(title: String) = DetailDraft(null, title, "", "", "",
-            listOf(ReminderDraft(kind = ReminderDraftKind.Specified)))
+        fun forCreation(title: String, listId: String? = null) = DetailDraft(
+            null, title, "", "", "", listOf(ReminderDraft(kind = ReminderDraftKind.Specified)), listId,
+        )
         fun timeText(at: Instant?, zone: ZoneId): String =
             at?.atZone(zone)?.toLocalDateTime()?.toString()?.replace('T', ' ').orEmpty()
     }
@@ -130,6 +141,11 @@ data class DetailDraft(
 data class UiState(
     val items: List<TodoItem> = emptyList(),
     val completedItems: List<TodoItem> = emptyList(),
+    val todoLists: List<TodoList> = emptyList(),
+    val selectedView: TodoView = TodoView.Today,
+    val unscheduledOnly: Boolean = false,
+    val addOpen: Boolean = false,
+    val addTargetListId: String? = null,
     val deliveredIds: Set<String> = emptySet(),
     val detail: DetailDraft? = null,
     val loading: Boolean = true,
@@ -218,8 +234,13 @@ class TodoViewModel @JvmOverloads constructor(
     private suspend fun reload() {
         val pending = useCases.listIncomplete()
         val completed = useCases.listCompleted()
+        val lists = useCases.listTodoLists()
         val delivered = (pending + completed).filter { useCases.wasDelivered(it) }.map { it.id }.toSet()
+        val selected = _state.value.selectedView
+        val safeView = if (selected is TodoView.CustomList &&
+            lists.none { it.id == selected.listId }) TodoView.Inbox else selected
         _state.value = _state.value.copy(items = pending, completedItems = completed,
+            todoLists = lists, selectedView = safeView,
             deliveredIds = delivered, now = clock.now(), loading = false)
     }
 
@@ -241,6 +262,80 @@ class TodoViewModel @JvmOverloads constructor(
     fun onRefresh() {
         refreshCapabilities()
         if (!_state.value.busy) refresh()
+    }
+
+    fun onSelectView(view: TodoView) {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(
+            selectedView = view,
+            unscheduledOnly = if (view is TodoView.Inbox || view is TodoView.CustomList) {
+                _state.value.unscheduledOnly
+            } else false,
+            message = null,
+        )
+    }
+
+    fun onToggleUnscheduledFilter() {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(unscheduledOnly = !_state.value.unscheduledOnly)
+    }
+
+    /** 打开一个空白添加流程；误触时可直接取消，不产生事项。 */
+    fun onOpenAdd(startVoice: Boolean = false) {
+        val current = _state.value
+        if (current.busy || current.addOpen) return
+        val target = (current.selectedView as? TodoView.CustomList)?.listId
+        _state.value = current.copy(
+            addOpen = true,
+            addTargetListId = target,
+            draftText = "",
+            draftHasTime = false,
+            draftTime = null,
+            inputError = null,
+            message = null,
+        )
+        if (startVoice) onToggleRecord()
+    }
+
+    fun onCloseAdd() {
+        if (_state.value.busy) return
+        onCancelRecording()
+        invalidateAiRequest()
+        draftRevision++
+        _state.value = _state.value.copy(
+            addOpen = false,
+            addTargetListId = null,
+            draftText = "",
+            draftHasTime = false,
+            draftTime = null,
+            inputError = null,
+            message = null,
+        )
+    }
+
+    fun onCreateList(name: String) = action {
+        val list = useCases.createList(name)
+        _state.value = _state.value.copy(
+            selectedView = TodoView.CustomList(list.id),
+            unscheduledOnly = false,
+            message = "清单「${list.name}」已创建",
+        )
+        reload()
+    }
+
+    fun onRenameList(id: String, name: String) = action {
+        val list = useCases.renameList(id, name)
+        _state.value = _state.value.copy(message = "清单已重命名为「${list.name}」")
+        reload()
+    }
+
+    fun onDeleteList(id: String) = action {
+        useCases.deleteList(id)
+        if ((_state.value.selectedView as? TodoView.CustomList)?.listId == id) {
+            _state.value = _state.value.copy(selectedView = TodoView.Inbox, unscheduledOnly = false)
+        }
+        _state.value = _state.value.copy(message = "清单已删除，事项已移回收集箱")
+        reload()
     }
 
     fun onRetryStorage() = action { storage.initialize(); reload() }
@@ -368,7 +463,7 @@ class TodoViewModel @JvmOverloads constructor(
             return
         }
         _state.value = s.copy(
-            detail = DetailDraft.forCreation(s.draftText),
+            detail = DetailDraft.forCreation(s.draftText, s.addTargetListId),
             inputError = null,
             message = null,
         )
@@ -397,8 +492,9 @@ class TodoViewModel @JvmOverloads constructor(
             return
         }
         action {
-            val result = useCases.confirmDraft(s.draftText, at)
+            val result = useCases.confirmDraft(s.draftText, at, listId = s.addTargetListId)
             _state.value = _state.value.copy(
+                addOpen = false, addTargetListId = null,
                 draftText = "", draftHasTime = false, draftTime = null,
                 inputError = null,
                 message = outcomeMessage(result.outcome),
@@ -408,14 +504,7 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onCancel() {
-        if (_state.value.busy) return
-        onCancelRecording()
-        invalidateAiRequest()
-        draftRevision++
-        _state.value = _state.value.copy(
-            draftText = "", draftHasTime = false, draftTime = null,
-            inputError = null, message = null,
-        )
+        onCloseAdd()
     }
 
     fun onOpenAiSettings() {
@@ -612,8 +701,11 @@ class TodoViewModel @JvmOverloads constructor(
                 quadrant = draft.quadrant,
                 itemId = draft.itemId,
                 suggestedQuadrant = draft.suggestedQuadrant,
+                listId = _state.value.addTargetListId,
             )
             _state.value = _state.value.copy(
+                addOpen = false,
+                addTargetListId = null,
                 aiDraft = null,
                 aiError = null,
                 draftText = "",
@@ -661,6 +753,11 @@ class TodoViewModel @JvmOverloads constructor(
         })
     }
 
+    fun onDetailListChange(listId: String?) {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(detail = _state.value.detail?.copy(listId = listId))
+    }
+
     fun onAddReminder(kind: ReminderDraftKind) {
         val detail = _state.value.detail ?: return
         if (!_state.value.busy) _state.value = _state.value.copy(
@@ -704,9 +801,12 @@ class TodoViewModel @JvmOverloads constructor(
                     edit.remindAt,
                     edit.plannedDate,
                     edit.dueAt,
+                    listId = edit.listId,
                 )
                 draftRevision++
                 _state.value = _state.value.copy(
+                    addOpen = false,
+                    addTargetListId = null,
                     draftText = "",
                     draftHasTime = false,
                     draftTime = null,

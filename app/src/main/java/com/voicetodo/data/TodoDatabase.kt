@@ -2,6 +2,7 @@ package com.voicetodo.data
 
 import androidx.room.*
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoReminder
 import com.voicetodo.domain.Quadrant
 import java.time.Duration
@@ -13,7 +14,19 @@ import java.time.format.DateTimeFormatterBuilder
 import org.json.JSONArray
 import org.json.JSONObject
 
-@Entity(tableName = "todos")
+@Entity(tableName = "todo_lists")
+data class TodoListEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val createdAt: Instant,
+) {
+    fun list() = TodoList(id, name, createdAt)
+    companion object {
+        fun from(list: TodoList) = TodoListEntity(list.id, list.name, list.createdAt)
+    }
+}
+
+@Entity(tableName = "todos", indices = [Index("listId")])
 data class TodoEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -28,6 +41,8 @@ data class TodoEntity(
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
     /** AI 的初始建议，只用于展示；用户移动象限后仍保留原建议。 */
     val suggestedQuadrant: Quadrant? = null,
+    /** 所属自建清单；为空表示收集箱。 */
+    val listId: String? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -41,6 +56,7 @@ data class TodoEntity(
         reminders = reminders,
         quadrant = quadrant,
         suggestedQuadrant = suggestedQuadrant,
+        listId = listId,
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -55,6 +71,7 @@ data class TodoEntity(
             reminders = item.reminders,
             quadrant = item.quadrant,
             suggestedQuadrant = item.suggestedQuadrant,
+            listId = item.listId,
         )
     }
 }
@@ -115,6 +132,11 @@ interface TodoDao {
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun importItems(items: List<TodoEntity>)
     @Query("DELETE FROM todos WHERE id = :id") suspend fun delete(id: String)
     @Query("DELETE FROM deliveries WHERE itemId = :id") suspend fun deleteDeliveries(id: String)
+    @Query("SELECT * FROM todo_lists ORDER BY createdAt ASC, id ASC") suspend fun lists(): List<TodoListEntity>
+    @Query("SELECT * FROM todo_lists WHERE id = :id") suspend fun findList(id: String): TodoListEntity?
+    @Upsert suspend fun saveList(list: TodoListEntity)
+    @Query("DELETE FROM todo_lists WHERE id = :id") suspend fun deleteList(id: String)
+    @Query("UPDATE todos SET listId = NULL WHERE listId = :id") suspend fun clearList(id: String)
     @Query("SELECT deliveredAt FROM deliveries WHERE itemId = :id AND reminderRevision = :revision")
     suspend fun deliveredAt(id: String, revision: Long): Instant?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun delivered(record: DeliveryEntity)
@@ -133,8 +155,9 @@ interface TodoDao {
         StorageMigration::class,
         FocusSessionEntity::class,
         FocusSettingsEntity::class,
+        TodoListEntity::class,
     ],
-    version = 5,
+    version = 6,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -153,6 +176,20 @@ abstract class TodoDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `focus_sessions` (`id` TEXT NOT NULL, `phase` TEXT NOT NULL, `startedAt` TEXT NOT NULL, `endsAt` TEXT NOT NULL, `lastResumedAt` TEXT NOT NULL, `durationSeconds` INTEGER NOT NULL, `pausedAt` TEXT, `accumulatedFocusSeconds` INTEGER NOT NULL, `completedPomodoros` INTEGER NOT NULL, `itemId` TEXT, `state` TEXT NOT NULL, `endedAt` TEXT, PRIMARY KEY(`id`))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `focus_settings` (`id` INTEGER NOT NULL, `focusMinutes` INTEGER NOT NULL, `shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, `longBreakEvery` INTEGER NOT NULL, PRIMARY KEY(`id`))")
                 db.execSQL("INSERT INTO focus_settings (id, focusMinutes, shortBreakMinutes, longBreakMinutes, longBreakEvery) VALUES (1, 25, 5, 15, 4)")
+            }
+        }
+
+        /**
+         * v5 -> v6：新增自建清单与事项归属。
+         *
+         * 不重建 todos 表，避免删除父表时把 reminder_deliveries 一并级联删除；
+         * 清单删除由仓库事务先把事项移回收集箱。
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `todo_lists` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `createdAt` TEXT NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("ALTER TABLE `todos` ADD COLUMN `listId` TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_todos_listId` ON `todos` (`listId`)")
             }
         }
     }

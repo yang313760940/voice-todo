@@ -59,8 +59,5 @@ fun quadrantEntries(items: List<TodoItem>, quadrant: Quadrant, now: Instant): Li
                 .thenBy { it.item.id },
         )
 
-private fun TodoItem.reminderTimes(): List<Instant> =
-    if (reminders.isEmpty()) listOfNotNull(remindAt) else reminders.map { it.at }
-
 private fun TodoItem.sortInstant(now: Instant): Instant? =
     if (isOverdue(now)) dueAt else nextQuadrantInstant(now)

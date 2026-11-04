@@ -18,12 +18,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -188,8 +189,7 @@ class QuadrantScreenTest {
             .assertTextEquals("AI 建议：重要且紧急（仅建议）")
 
         compose.onNodeWithTag("nav_todo").performClick()
-        // 待办页把固定头部放在 0..7，首个未完成事项在索引 8。
-        compose.onNodeWithTag("todo_list").performScrollToIndex(8)
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
         compose.onNodeWithTag("todo_quadrant_${item.id}", useUnmergedTree = true)
             .assertTextEquals("象限：重要且紧急")
     }

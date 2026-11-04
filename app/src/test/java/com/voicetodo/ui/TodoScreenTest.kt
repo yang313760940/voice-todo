@@ -79,6 +79,7 @@ class TodoScreenTest {
     }
 
     @Test fun savingWithoutReminderCreatesAnUntimedItemAndGivesDistinctFeedback() {
+        openAdd()
         compose.onNodeWithTag("title_field").performTextInput("Untimed")
         compose.onNodeWithTag("save_without_reminder_button").performClick()
         waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
@@ -88,6 +89,7 @@ class TodoScreenTest {
     }
 
     private fun createUntimed(title: String = "Original"): TodoItem {
+        openAdd()
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("title_field"))
         compose.onNodeWithTag("title_field").performTextReplacement(title)
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("save_without_reminder_button"))
@@ -97,6 +99,10 @@ class TodoScreenTest {
     }
 
     private fun open(item: TodoItem, completed: Boolean = false) {
+        compose.runOnIdle {
+            vm.onSelectView(if (completed) TodoView.Completed else TodoView.All)
+        }
+        compose.waitForIdle()
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag(if (completed) "completed_row_0" else "item_row_0"))
         compose.onNodeWithTag("open_${item.id}").performClick()
         waitFor { vm.state.value.detail?.original?.id == item.id && !vm.state.value.busy }
@@ -224,6 +230,7 @@ class TodoScreenTest {
     }
 
     @Test fun speechDraftCanBeEditedAndManualReminderFeedbackDistinguishesSchedulerFailure() {
+        openAdd()
         compose.runOnIdle { vm.transcribeSamplesForTest(floatArrayOf(0f), 16000) }
         waitFor { vm.state.value.draftText == "From speech" }
         compose.onNodeWithTag("title_field").performTextReplacement("Edited speech")
@@ -235,7 +242,10 @@ class TodoScreenTest {
         Assert.assertEquals("已保存并安排提醒", vm.state.value.message)
         Assert.assertEquals("Edited speech", vm.state.value.items.single().title)
         scheduler.scheduleSucceeds = false
+        openAdd()
         compose.onNodeWithTag("title_field").performTextReplacement("Not ready")
+        compose.onNodeWithTag("hour_field").performTextInput("18")
+        compose.onNodeWithTag("minute_field").performTextInput("30")
         compose.onNodeWithTag("pick_time_button").performClick()
         compose.onNodeWithTag("save_button").performClick()
         waitFor { vm.state.value.items.size == 2 && !vm.state.value.busy }
@@ -330,6 +340,8 @@ class TodoScreenTest {
         }
         waitFor { vm.state.value.storageError != null && !vm.state.value.loading }
         compose.onNodeWithTag("storage_error").assertTextEquals("数据迁移失败，旧文件已保留；修复后可重试")
+        compose.runOnIdle { vm.onOpenAdd() }
+        compose.waitForIdle()
         compose.onNodeWithTag("save_button").assertIsNotEnabled()
         Assert.assertEquals("[broken", file.readText())
         Assert.assertTrue(vm.state.value.items.isEmpty())
@@ -393,5 +405,12 @@ class TodoScreenTest {
         } catch (e: Exception) {
             throw AssertionError("UI state at timeout: ${vm.state.value}", e)
         }
+    }
+
+    private fun openAdd() {
+        if (vm.state.value.addOpen) return
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("text_add_button"))
+        compose.onNodeWithTag("text_add_button").performClick()
+        waitFor { vm.state.value.addOpen }
     }
 }

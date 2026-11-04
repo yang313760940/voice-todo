@@ -31,6 +31,8 @@ data class TodoItem(
     val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
     /** AI 给出的初始建议；只用于展示，不随用户移动象限而改变。 */
     val suggestedQuadrant: Quadrant? = null,
+    /** 所属自建清单；为空表示收集箱。 */
+    val listId: String? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */
@@ -48,6 +50,10 @@ fun TodoItem.findReminder(reminderId: String): TodoReminder? =
     if (reminders.isNotEmpty()) reminders.firstOrNull { it.id == reminderId }
     else if (reminderId == id) remindAt?.let { TodoReminder(id, it, revision = reminderRevision) }
     else null
+
+/** 当前生效的全部提醒时刻；旧数据只有 remindAt 时按单条提醒处理。 */
+fun TodoItem.reminderTimes(): List<Instant> =
+    if (reminders.isEmpty()) listOfNotNull(remindAt) else reminders.map { it.at }
 
 fun TodoItem.isCurrentReminder(itemId: String, reminderId: String, revision: Long, atMillis: Long): Boolean {
     val reminder = findReminder(reminderId) ?: return false

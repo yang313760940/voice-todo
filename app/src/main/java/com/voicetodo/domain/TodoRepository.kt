@@ -21,6 +21,16 @@ interface TodoRepository {
     suspend fun deliveredAt(itemId: String, reminderId: String, revision: Long): Instant? =
         if (reminderId == itemId) deliveredAt(itemId, revision) else null
 
+    /** 用户自建清单；收集箱没有实体。 */
+    suspend fun lists(): List<TodoList> = emptyList()
+    suspend fun findListById(id: String): TodoList? = lists().firstOrNull { it.id == id }
+    suspend fun saveList(list: TodoList) {}
+
+    /** 删除清单并把其事项移回收集箱；实现应保证这一步不可分割。 */
+    suspend fun deleteList(id: String) {
+        all().filter { it.listId == id }.forEach { save(it.copy(listId = null)) }
+    }
+
     /** Atomically validate, publish once, then record success. A failed publish remains retryable. */
     suspend fun deliverReminder(
         itemId: String,

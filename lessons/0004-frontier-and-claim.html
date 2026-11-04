@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 4 课 · 从“拆好票”到“开工”：认领 #2</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<p class="lesson-kicker">Lesson 04 · 做一块</p>
+<h1>从“拆好票”到“开工”：认领 #2</h1>
+<p class="subtitle">票拆完了，24 张。下一步不是“全部开始做”，而是“找出唯一能开工的那张，认领它，然后只做它”。</p>
+
+<h2>先纠正一个直觉</h2>
+
+<p>你看到 24 张票，第一反应可能是“那我按顺序一张张做过去”。<strong>先别急。</strong>在开工之前，你要先回答一个问题：<strong>这 24 张里，现在到底哪张能开始？</strong>答案是——只有一张。</p>
+
+<div class="callout">
+  <span class="label">核心概念：frontier（可接的票）</span>
+  一张票“能开工”，要同时满足两件事：<strong>① 它没有被任何未完成的票阻塞（<code>blocked_by</code> 为 0）；② 没有别人已经认领它。</strong>满足的票组成“frontier”，就像棋盘上现在能落子的位置。你的 24 张票里，frontier 只有 <strong>#2</strong>。
+</div>
+
+<h2>为什么要看依赖，而不是硬按编号</h2>
+
+<p>你的票有一段真实依赖（完整图见 <a href="../reference/ticket-map.html">票的依赖路线图</a>）。抽几条给你看：</p>
+
+<table>
+  <thead><tr><th>票</th><th>被谁阻塞</th><th>意思</th></tr></thead>
+  <tbody>
+    <tr><td>#2 最小闭环</td><td>无</td><td>✅ 可以立刻做</td></tr>
+    <tr><td>#3 真机早期验收</td><td>#2</td><td>得先有一份能装的 APK，才能上真机验</td></tr>
+    <tr><td>#4 事项详情</td><td>#3</td><td>真机闭环过了，才扩展详情编辑</td></tr>
+    <tr><td>#6 多提醒闭环</td><td>#4</td><td>得先有事项详情，才挂多提醒</td></tr>
+    <tr><td>#12 解锁前提醒</td><td>#11</td><td>先是提醒恢复，才谈解锁前</td></tr>
+    <tr><td>#16 AI多草稿</td><td>#15</td><td>先有单事项 AI 闭环，才做多草稿</td></tr>
+  </tbody>
+</table>
+
+<p>看出规律没有？<strong>依赖是一条“先地基后楼层”的链。</strong>如果现在跳过 #2 去做 #16（AI 多草稿），你会在一个连 APK 都构建不出来、闹钟都不响的工程上，去调 AI 拆多草稿——层楼盖在空气上。</p>
+
+<div class="callout warn">
+  <span class="label">所以“下一步”的第一条纪律</span>
+  <strong>一次只做 frontier 上的一张票，做完再重算 frontier。</strong>不要并行很多张——这是初学者最常犯的错，也是 AI 最容易失控的地方（你以为它做一张，它其实同时碰了五张）。
+</div>
+
+<h2>下一步的确切动作：三步</h2>
+
+<ol class="steps">
+  <li>
+    <strong>确认 #2 可开工。</strong>它的 <code>blocked_by</code> 是 0、没人认领——我已帮你核实过。它就是你的第一张。
+  </li>
+  <li>
+    <strong>认领它：<code>gh issue edit 2 --add-assignee @me</code>。</strong>意思是“这张票我接了”。认领这个动作很重要：它把票从未认领状态移出 frontier，别的人（或别的 AI 会话）就不会重复做同一张。
+  </li>
+  <li>
+    <strong>按“做一块”的循环推进 #2：</strong>建工程 → 先写一个“会失败的测试”（比如“点录音应得转写”）→ 写代码让它过 → 用真实音频和真实闹钟验收 → 复查 → 关票。下一课我们从「建出第一个能跑的安卓工程」开始，一步一步来。
+  </li>
+</ol>
+
+<p class="sidenote">你现在还不必亲自敲命令。第 5 课我会带你亲手认领、亲手建工程。今天先把“只看 frontier 上那一张”这个纪律装进脑子。</p>
+
+<h2>为什么这才是对的下一步（而不是马上写代码）</h2>
+
+<p>回想第 1 课的五步循环：<strong>想清楚 → 拆小 → 做一块 → 验一块 → 复查</strong>。你的 24 张票说明你已经走完「想清楚」和「拆小」了。现在停在门口，正要踏进「做一块」。但踏进去之前，<strong>先选出该踏哪一块</strong>——这就是这一课。</p>
+
+<p>而且——注意你仓库里多了 <code>docs/research/</code> 两篇技术事实（离线识别、闹钟兼容性）。这是“做之前先查清关键风险”的成熟习惯。等我们做 #2，它的第一条验收标准「模型来源、版本、许可已记录」就要用到这份研究。这不是巧合，是有人提前把最危险的两个技术点先摸了一遍。</p>
+
+<h2>小测验：你真的会“挑下一张”了吗</h2>
+
+<div class="quiz" data-quiz>
+  <p class="q">1. 一张票“现在能开工”，必须同时满足哪两件事？</p>
+  <button class="opt" data-correct="false">编号最小，而且标题写得足够短而清楚</button>
+  <button class="opt" data-correct="true">没有未完成阻塞，而且当前没有人认领它</button>
+  <button class="opt" data-correct="false">已经写完代码，而且测试也全部通过</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">2. 你的 24 张票里，现在唯一能开工的是哪张？</p>
+  <button class="opt" data-correct="false">#16 AI多草稿，因为它功能最炫可以先做</button>
+  <button class="opt" data-correct="false">#23 真机交付验收，因为它是最晚的终点</button>
+  <button class="opt" data-correct="true">#2 最小闭环，因为没有任何票阻塞它</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">3. 为什么不能跳着去做后面的票？</p>
+  <button class="opt" data-correct="true">后面的票依赖前面的成果，跳做等于悬空盖楼</button>
+  <button class="opt" data-correct="false">因为 GitHub 规定必须按票号从小到大依次完成</button>
+  <button class="opt" data-correct="false">因为后面的票写得太差，需要先重写一遍再说</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="lesson-footer">
+  <h3>这节课你拿到了什么</h3>
+  <p>你会“挑下一张”了：只看 frontier（无阻塞 + 未认领），一次只做一张。你也知道了<b>“认领”</b>这个动作的意义，并亲眼看到 24 张票是怎么被依赖串成一条“先地基后楼层”的路线。这就是五步循环从「拆小」跨进「做一块」的那一步。</p>
+
+  <h3>想再深入，读这个（一手资源）</h3>
+  <p>👉 <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/assigning-issues-and-pull-requests-to-other-github-users" target="_blank" rel="noopener">GitHub 官方 ——《Assigning issues》</a>。看懂“指派人（assignee）”到底是怎么一个字段、为什么它是“我在做这张”的公开信号。</p>
+
+  <h3>下一课</h3>
+  <p>➡️ 第 5 课 · 亲手认领 #2，并建出第一个能跑的安卓工程（我们会真的跑 <code>gh issue edit 2 --add-assignee @me</code>，再引出“红测试”是什么）。</p>
+
+  <div class="ask">
+    💬 <strong>随时问我。</strong>想现在就把 #2 认领掉，直接说“帮我认领 #2”。想先聊“安卓工程到底长什么样”“为什么第一次要先写失败的测试”，也都问。别自己硬扛。
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

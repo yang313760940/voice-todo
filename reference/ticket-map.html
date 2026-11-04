@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 票的依赖路线图</title>
+<link rel="stylesheet" href="../assets/course.css">
+<style>
+  body { font-size: 17px; }
+  .lane { margin: 0 0 1.6rem; }
+  .node { display: inline-block; font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem;
+          background: var(--code-bg); border: 1px solid var(--rule); border-radius: 5px;
+          padding: 0.2rem 0.5rem; margin: 0.15rem 0.1rem; white-space: nowrap; }
+  .node.entry { background: #dff2ea; border-color: var(--accent); font-weight: 700; }
+  .node.done { opacity: 0.55; text-decoration: line-through; }
+  .arrow { color: var(--ink-soft); font-family: ui-monospace, monospace; }
+  .legend { font-size: 0.85rem; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+
+<p class="lesson-kicker">Reference · 速查表</p>
+<h1>票的依赖路线图</h1>
+<p class="subtitle">截至 2026-11-04：24 张票，全部 ready-for-agent、全部未认领、零代码。这张图回答一个问题：<strong>现在能开工的是哪张？</strong></p>
+
+<div class="callout">
+  <span class="label">一句话结论</span>
+  <strong>唯一没有阻塞、可以立刻开工的，是 #2。</strong>做完 #2，才解开 #3；#3 做完才解开 #4……整条链是一根清晰的顺序线，外加几处并行分叉。
+</div>
+
+<h2>怎么读这张图</h2>
+
+<p>每个方框是一张票。<span class="node">#2 …</span> 这样的数字就是 GitHub 票号。<strong>箭头表示“先做左边，才能做右边”</strong>（即右边的票被左边阻塞，<code>blocked_by</code>）。绿色的是当前入口。</p>
+
+<div class="lane">
+  <span class="node entry">#2 最小闭环</span>
+  <span class="arrow">→</span> <span class="node">#3 真机早期验收</span>
+  <span class="arrow">→</span> <span class="node">#4 事项详情</span>
+  <span class="arrow">→ 分叉 ↓</span>
+</div>
+
+<div class="lane">
+  <strong>从 #4 之后并行推进的四条支线：</strong><br>
+  <span class="node">#5 清单闭环</span>
+  <span class="node">#6 多提醒闭环</span>
+  <span class="node">#14 离线输入完善</span>
+  <span class="node">#17 番茄会话</span>
+</div>
+
+<div class="lane">
+  <strong>提醒主线：</strong><br>
+  <span class="node">#6 多提醒</span> <span class="arrow">→</span>
+  <span class="node">#7 重复事项</span> <span class="arrow">→</span>
+  <span class="node">#8 重复变更</span> / <span class="node">#9 通知操作</span> <span class="arrow">→</span>
+  <span class="node">#10 提醒能力页</span> <span class="arrow">→</span>
+  <span class="node">#11 提醒恢复</span> <span class="arrow">→</span>
+  <span class="node">#12 解锁前提醒</span> / <span class="node">#18 备份恢复</span>
+</div>
+
+<div class="lane">
+  <strong>语音/AI 主线：</strong><br>
+  <span class="node">#14 离线输入完善</span> <span class="arrow">→</span>
+  <span class="node">#15 在线AI单事项</span> <span class="arrow">→</span>
+  <span class="node">#16 AI多草稿</span>
+</div>
+
+<div class="lane">
+  <strong>界面与偏好主线（#4 之后）：</strong><br>
+  <span class="node">#17 番茄</span> <span class="arrow">→</span> <span class="node">#19 设置与导航</span> <span class="arrow">→</span>
+  <span class="node">#20 回收站</span> / <span class="node">#21 四象限</span> <span class="arrow">→</span>
+  <span class="node">#22 待办首页</span> <span class="arrow">→</span>
+  <span class="node">#23 真机交付验收</span> <span class="arrow">→</span>
+  <span class="node">#24 设备验收矩阵</span>
+</div>
+
+<p class="legend">另有 <span class="node">#13 事项朗读</span>（被 #10 阻塞）。图里为可读性做了简化，精确 <code>blocked_by</code> 以 GitHub 票面为准。</p>
+
+<h2>为什么入口只有 #2</h2>
+
+<p>因为 #2 是“最小可跑闭环”——录音→离线转写→存一条事项→系统闹钟真的响。系统里<strong>其它所有票都直接或间接依赖它</strong>。在它跑通之前，做别的都等于在空中楼阁上加装修。</p>
+
+<div class="callout warn">
+  <span class="label">教学要点</span>
+  “能不能开工”不是凭感觉，而是看两件事：<strong>① 有没有未关闭的阻塞票（<code>blocked_by</code>）；② 有没有人已经认领（assignee）。</strong>两者都空，才是“可接的票”（frontier）。这套工具链里这叫做“找 frontier”。
+</div>
+
+<h2>一张票“开工”的三步（写进肌肉记忆）</h2>
+
+<ol class="steps">
+  <li><strong>确认可开工：</strong>看 <code>blocked_by</code> 为 0、且没人认领。</li>
+  <li><strong>认领：</strong>把票指派给自己（<code>gh issue edit &lt;号&gt; --add-assignee @me</code>），告诉所有人“这张我在做”。</li>
+  <li><strong>开工：</strong>分支 → 写失败测试（红）→ 写代码让它过（绿）→ 复查 → 关票。</li>
+</ol>
+
+<div class="lesson-footer">
+  <div class="ask">
+    💬 <strong>随时问我。</strong>“这张图里某条线为什么这么排”“为什么 #13 要等 #10”——都可以问。图上简化过的地方，我可以把那张票的真实 <code>blocked_by</code> 拉给你看。
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 课 · 开发的“五步循环”</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<p class="lesson-kicker">Lesson 01 · 总览</p>
+<h1>开发的“五步循环”</h1>
+<p class="subtitle">在学习任何一条命令之前，先看清你要重复走的整条路。</p>
+
+<h2>你要的东西，其实是一个循环</h2>
+
+<p>你说自己想「学会软件开发本身」。好消息是：软件开发不是一堆要背的语法，而是一个<strong>可以重复执行的循环</strong>。你只学会这一个循环，就能做任何软件——包括你这个语音提醒 App。</p>
+
+<p>这套 Matt Pocock 工具链，就是把这个循环的每一步都做成了一个专门的“技能”。你要学的，不是代码，而是<strong>怎么在每一步上下命令、做判断</strong>。AI 负责打字，你负责决定「做什么、对不对、继续还是停」。</p>
+
+<div class="callout">
+  <span class="label">一句话记住</span>
+  开发 = 「想清楚 → 拆小 → 做一块 → 验一块 → 复查」，然后<em>回到第一步</em>再走一圈。App 就是这一圈一圈、每一圈都跑通一小块，慢慢长出来的。
+</div>
+
+<h2>这五步分别是什么</h2>
+
+<ol class="steps">
+  <li>
+    <strong>想清楚要做什么。</strong>把模糊的想法逼成明确的边界：到底给谁用、解决什么、什么算做完、什么不做。你的仓库里已经做了一部分——<code>docs/requirements-interview.md</code>（需求访谈）和 <code>GLOSSARY.md</code>（术语表），就是这一步的产物。
+  </li>
+  <li>
+    <strong>拆成一小块一小块。</strong>把「做个 App」拆成「这张票、那张票」，每张都小到一次能做完、能验收。工具链里这张「小任务卡」叫 <strong>issue</strong>（工单/票）。<em>这是这套工具链的核心。</em>
+  </li>
+  <li>
+    <strong>做一小块。</strong>拿一张票，让 AI 写代码实现它。一次只做一张，不贪多。
+  </li>
+  <li>
+    <strong>验一小块。</strong>用测试（test）证明这块真的按需求工作了，而不是“看起来能跑”。绿了才算过。
+  </li>
+  <li>
+    <strong>复查一小块。</strong>回头核对：代码符不符合需求？符不符合项目自己的规范？有没有偷偷夹带你不想要的东西？然后<strong>关上这张票</strong>，回到第 1 步走下一圈。
+  </li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">初学者最容易踩的坑</span>
+  跳过第 1、2 步，直接让 AI「帮我做个 App」。结果它一口气写一大堆你没想清楚的东西，你既看不懂、也没法验收，最后推倒重来。<strong>这个循环真正的价值，全在前两步。</strong>
+</div>
+
+<h2>为什么这个顺序不能反</h2>
+
+<p>注意一件事：循环是<strong>顺时针、有方向</strong>的。你必须先想清楚、先拆小，才能做和验。如果倒过来——先写代码再想需求——你就没有标准去判断「做好了没有」，只能凭感觉，而感觉会骗你。</p>
+
+<p class="sidenote">这是软件开发里最反直觉的一点：看起来“写代码”是主体，其实“想清楚”和“拆小”才决定了成败。写代码反而是最快的一步。</p>
+
+<h2>把五步对上你要学的工具</h2>
+
+<table>
+  <thead>
+    <tr><th>循环这一步</th><th>工具链里对应的技能</th><th>你干的活</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1 想清楚</td><td>需求访谈 / <code>domain-modeling</code>（术语）/ <code>grilling</code>（拷问边界）</td><td>回答、拍板、确认</td></tr>
+    <tr><td>2 拆小</td><td><code>issue tracker</code>（工单）/ <code>wayfinder</code>（地图与路线）</td><td>决定先做哪块</td></tr>
+    <tr><td>3 做一块</td><td><code>tdd</code>（测试驱动）</td><td>下令、看它写</td></tr>
+    <tr><td>4 验一块</td><td><code>tdd</code> 的红-绿</td><td>看测试绿没绿</td></tr>
+    <tr><td>5 复查一块</td><td><code>code-review</code>（规范 + 需求两轴复查）</td><td>说“过”或“改”</td></tr>
+  </tbody>
+</table>
+
+<p>你现在一个都不必会。接下来的每一课，我就带你<strong>一步一步走真实的第一圈</strong>——用你自己的语音提醒 App 当例子。上完这一圈，你就知道整套东西是怎么转起来的了。</p>
+
+<h2>小测验：把循环装进脑子</h2>
+
+<p>不看上面，凭记忆选。这三题帮你确认“存储强度”而不是“看一眼的熟练感”。</p>
+
+<div class="quiz" data-quiz>
+  <p class="q">1. 五步循环里，哪一步是这套工具链的<strong>核心</strong>？</p>
+  <button class="opt" data-correct="false">做一小块，让 AI 把代码写出来</button>
+  <button class="opt" data-correct="false">验一小块，用测试来证明它能工作</button>
+  <button class="opt" data-correct="true">拆一小块，把大目标切成能验收的票</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">2. 为什么不能跳过第 1、2 步直接写代码？</p>
+  <button class="opt" data-correct="true">没有需求与拆解，就没有判断“做完”的标准</button>
+  <button class="opt" data-correct="false">因为 AI 写代码的速度其实没有你想象快</button>
+  <button class="opt" data-correct="false">因为安卓要求先交钱才允许你开始写代码</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">3. 这个循环跑完一圈后，你接下来做什么？</p>
+  <button class="opt" data-correct="false">把整个 App 从头再写一遍，确保风格统一</button>
+  <button class="opt" data-correct="false">停下来，等所有功能都想清楚再继续下一圈</button>
+  <button class="opt" data-correct="true">回到第 1 步，带着新认知走下一小圈</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="lesson-footer">
+  <h3>课后要知道的</h3>
+  <p><strong>你不需要现在动手做任何事。</strong>这一课的唯一产物，是你脑子里多了一张地图：以后每学一个技能，你都能把它放回这五步里的某一步。</p>
+
+  <h3>想再深入一点，读这个（最高质量一手资源）</h3>
+  <p>👉 <a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener">Anthropic —《Building effective agents》</a>。别被标题吓到，你只需读开头关于“工作流 vs 自主 agent、为什么需要人在环路里做判断”的部分——它正好解释了为什么这套工具是「你下命令、AI 执行」而不是「AI 全自动」。</p>
+
+  <h3>下一课</h3>
+  <p>➡️ <a href="0002-issue-as-a-ticket.html">第 2 课 · 一张 issue 就是一张“小任务卡”</a>（我们会真的在你仓库里拆出第一张票）</p>
+
+  <div class="ask">
+    💬 <strong>随时问我。</strong>我是你的老师。这一课里任何一句没懂——“issue 到底是什么”“为什么测试能证明对错”——直接问我，我用你 App 里的真实例子再讲一遍。别憋着。
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

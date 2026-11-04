@@ -1,0 +1,29 @@
+# Gradle / 构建产物
+.gradle/
+build/
+app/build/
+*.iml
+
+# 本机路径与临时工作
+local.properties
+.work/
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# 大型二进制（可复现获取，见 docs/offline-toolchain.md）
+# - 离线模型（78 MB）：assets/sherpa/model.int8.onnx
+# - 官方 sherpa-onnx AAR（47 MB）：app/libs/sherpa-onnx-1.13.8.aar
+# 二者体积大，不纳入 git；按文档中的 URL + SHA-256 获取后放回对应路径即可复现构建。
+app/src/main/assets/sherpa/model.int8.onnx
+app/libs/sherpa-onnx-1.13.8.aar
+
+# IDE
+.idea/
+*.hprof
+captures/
+
+# 下载中间/损坏残留
+*.broken
+*.part
+

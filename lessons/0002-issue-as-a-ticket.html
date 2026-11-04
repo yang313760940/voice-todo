@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 2 课 · 一张 issue 就是一张“小任务卡”</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<p class="lesson-kicker">Lesson 02 · 拆小</p>
+<h1>一张 issue 就是一张“小任务卡”</h1>
+<p class="subtitle">把“做个 App”这种吓人的大目标，变成一张你一眼能审核的小卡片。</p>
+
+<h2>先说结论</h2>
+
+<p>上一课说「拆一小块」是循环的核心。那<strong>拆出来的那一块，具体长什么样？</strong>答案是一张卡片，叫 <strong>issue</strong>（读：伊-秀，意思是“议题/工单”）。在 GitHub 上，issue 就是一条带标题、带正文、可以打标签、可以指派人、最后能“关上”的记录。</p>
+
+<div class="callout">
+  <span class="label">一句话记住</span>
+  issue = <strong>一件足够小、小到能一次做完、能明确判断“做完没有”的事</strong>。它不是笔记，不是待办，而是“交给 AI/自己去做、做完能验收、验收过就关闭”的活。
+</div>
+
+<h2>好 issue 和坏 issue 长什么样</h2>
+
+<p>先看你 App 里的真实需求。你 <code>docs/requirements-interview.md</code> 里 Q14 定了首页是待办列表。下面两种写法，体会差别：</p>
+
+<table>
+  <thead><tr><th>写法</th><th>内容</th><th>问题</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>❌ 太大</td>
+      <td>「做一个待办 App」</td>
+      <td>没法判断什么时候算做完；AI 会一口气写一堆你不认识的东西。</td>
+    </tr>
+    <tr>
+      <td>❌ 太虚</td>
+      <td>「优化一下首页体验」</td>
+      <td>“体验好”没有标准，无法验收，做法无穷多。</td>
+    </tr>
+    <tr>
+      <td>✅ 刚好</td>
+      <td>「首页顶部提供『收集箱 / 今天 / 最近七天 / 全部 / 已完成』五个入口，点击切换到对应列表」</td>
+      <td>有明确输入、明确行为、明确结果——一眼能判断做没做对。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="sidenote">判断标准只有一个：<strong>做完之后，你能不能指着一个东西说“这就是它”或“这不是它”。</strong>能，就是好 issue；不能，就还得再拆或者再想清楚。</p>
+
+<h2>一张好 issue 的四个零件</h2>
+
+<ol class="steps">
+  <li><strong>标题：一句动作。</strong>用动词开头，说清“做什么”。例：「首页加五个快捷入口」。别写成名词标题「首页」。</li>
+  <li><strong>目的：为什么做。</strong>一句话说明它解决谁的问题。有了它，AI 才不会做偏。例：「让用户能按时间范围快速收窄要看的事项」。</li>
+  <li><strong>验收标准：怎么算做完。</strong>列出可以逐条打勾的检查项。这是最重要的一栏——没有它，就没有“做完”。</li>
+  <li><strong>边界：什么不做。</strong>明确划掉范围外的东西，防止 AI 顺手乱加。例：「本票不做排序，不做搜索」。</li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">最值钱的一栏</span>
+  是<strong>验收标准</strong>。初学者常省掉它，于是每次都要凭感觉争吵“这算不算做完了”。写成可勾选的一条条，你和 AI 就不吵架了——勾满即完成，勾不满就继续改。
+</div>
+
+<h2>issue 在本仓库里到底存在哪</h2>
+
+<p>你这个仓库的 <code>AGENTS.md</code> 已经定好了：issue 不在某个文件里，而是<strong>真的存在于 GitHub 上</strong>（用 <code>gh</code> 命令行操作）。所以“建一张票”= 在 GitHub 上真的开一条记录。这件事稍后我会带你实际做，今天先不急着动手。</p>
+
+<h2>小测验：你能挑出好票吗</h2>
+
+<div class="quiz" data-quiz>
+  <p class="q">1. 下面哪条<strong>最像</strong>一张合格的 issue 标题？</p>
+  <button class="opt" data-correct="false">语音提醒应用整体功能与界面设计说明文档</button>
+  <button class="opt" data-correct="true">点击麦克风开始录音，再次点击结束并转写</button>
+  <button class="opt" data-correct="false">把语音识别这块好好做一下体验要顺畅</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">2. 一张 issue 里，哪一栏决定“这算不算做完了”？</p>
+  <button class="opt" data-correct="false">目的：它是为了解决谁的什么问题</button>
+  <button class="opt" data-correct="false">标题：用一句动词把要做什么说清楚</button>
+  <button class="opt" data-correct="true">验收标准：能逐条打勾的检查项</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">3. 「边界：什么不做」这一栏，主要用来防什么？</p>
+  <button class="opt" data-correct="true">防止 AI 顺手多做，把范围越撑越大</button>
+  <button class="opt" data-correct="false">防止自己写代码时忘记加注释和说明</button>
+  <button class="opt" data-correct="false">防止同事看到这张票之后来抢着做</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="lesson-footer">
+  <h3>这节课你拿到了什么</h3>
+  <p>你现在能一眼判断：一张票是太大、太虚，还是刚好。你也能说出好票的四个零件，尤其知道<strong>验收标准</strong>才是灵魂。</p>
+
+  <h3>想再深入，读这个（一手资源）</h3>
+  <p>👉 <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/learning-about-issues/about-issues" target="_blank" rel="noopener">GitHub 官方 ——《About issues》</a>。这是 issue 这个东西的定义出处，读一遍就能把“卡片、标签、指派、关闭”对上号。</p>
+
+  <h3>下一课</h3>
+  <p>➡️ 第 3 课 · 动手：在你仓库里拆出第一张真票（我们会用这套工具链，把 Q14 的「五个入口」真的建成一条 GitHub issue，你亲手按下“建”）。</p>
+
+  <div class="ask">
+    💬 <strong>随时问我。</strong>想立刻动手的话，直接跟我说“带我做第 3 课”或“帮我把 XX 拆成票”。也可以拿你需求访谈里任意一条，让我示范怎么拆。别自己硬猜。
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

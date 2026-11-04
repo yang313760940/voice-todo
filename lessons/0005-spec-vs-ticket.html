@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 课 · 别把“规格”当成“活”</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<p class="lesson-kicker">Lesson 05 · 读懂票的类型</p>
+<h1>别把“规格”当成“活”</h1>
+<p class="subtitle">#1 也显示“可以实施”了——但这不代表你该去“执行它”。这一课讲清 spec 和 ticket 的根本区别。</p>
+
+<h2>先回答你的问题</h2>
+
+<p><strong>#1 不需要你去“执行”。</strong>你看到“#1 也可以实施”，是因为工具对“无阻塞的票”统一这么提示，它<strong>不区分票的类型</strong>。而 #1 是一张 <strong>spec（规格）</strong>，不是一张能动手做的活。</p>
+
+<div class="callout">
+  <span class="label">一句话记住</span>
+  <strong>spec 的“实施” = 它下面的 ticket 被一张张做完。</strong>spec 自己永远是“容器”，不是一个你要亲手完成的任务。你去“做”一张规格，就像去“做”一份菜单——菜单本身不能吃，吃的是上面一道道的菜。
+</div>
+
+<h2>spec 与 ticket 的根本区别</h2>
+
+<table>
+  <thead><tr><th></th><th>#1 spec（规格）</th><th>#2 ticket（实施票）</th></tr></thead>
+  <tbody>
+    <tr><td><strong>回答的问题</strong></td><td>整个 App <strong>最终要成什么样</strong></td><td>这一小块<strong>具体做什么、怎么验收</strong></td></tr>
+    <tr><td><strong>大小</strong></td><td>很大，覆盖全部 70 条用户故事</td><td>很小，一次能做完</td></tr>
+    <tr><td><strong>能被“做完/关闭”吗</strong></td><td>只有当它下面<strong>所有</strong>票都做完，才可能关闭</td><td>做完当前这一块就能关闭</td></tr>
+    <tr><td><strong>你要对它做什么</strong></td><td>阅读、理解、必要时修订——<strong>不“执行”</strong></td><td>认领、动手、验收、关票——<strong>这才是活</strong></td></tr>
+    <tr><td><strong>它和其它的关系</strong></td><td>是父，下挂 #2–#24 共 23 张子票</td><td>是子，挂在 #1 底下</td></tr>
+  </tbody>
+</table>
+
+<p>其实你已经在 GitHub 上见过证据：打开 #1，它的子票列表里挂着 #2 到 #24，整整 23 张。这就是“容器”的样子。</p>
+
+<h2>那“实施 #1”到底是什么意思</h2>
+
+<p>当你看到 #1 标着“可以实施 / ready”，正确的理解是：</p>
+
+<ol class="steps">
+  <li><strong>它不阻塞任何东西</strong>——它作为规格已经写清楚了，不需要再等谁。</li>
+  <li><strong>它下面的票可以按依赖逐步开工</strong>——从 frontier 上唯一那张 #2 开始。</li>
+  <li><strong>“实施整个 #1” = 把 #2→#24 全部做完、验收、关闭</strong>，那是整个项目的大终点，不是今天的一个动作。</li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">初学者最容易踩的坑</span>
+  把规格当成一个大任务，直接“执行规格”，结果 AI 一口气想覆盖 70 条故事，写出一大坨没人能验收的东西，最后推倒重来。<strong>规格是用来“读”和“拆”的，不是用来“一次性干完”的。</strong>
+</div>
+
+<h2>所以你现在该做的，还是同一件事</h2>
+
+<p>答案没变，还是第 4 课那句：<strong>只做 frontier 上那一张，#2。</strong>#1 的“可以实施”不改变这一点——它只是告诉你“规格本身没问题，放心去做下面的票”。</p>
+
+<p class="sidenote">说一句实话：我查了 GitHub，#2 目前<b>还没有被<span>认领</span></b>（assignee 为空），也还是 OPEN。你说“#2 已经开始执行”，可能是你在别的窗口动了手。不管怎样，票面上先“认领 #2”这一步不能省——它是让所有人（和所有 AI）知道“这张已被占用”，避免重复施工。</p>
+
+<h2>顺便：一张票什么时候才算“关掉”</h2>
+
+<p>既然讲到“做完”，就顺带说清楚。<strong>关一张 ticket 的条件：它的验收标准全部打勾。</strong>比如 #2 的六条——能构建、离线真转写、能存能读、真闹钟响、权限检查、有可重复的演示证据——全绿，才关 #2。关掉 #2 的那一刻，#3（真机验收）才从“被阻塞”变成“可开工”。<strong>这就是循环“关上这张、回到第一步走下一圈”的真实样子。</strong></p>
+
+<h2>小测验：spec 还是 ticket</h2>
+
+<div class="quiz" data-quiz>
+  <p class="q">1. #1 显示“可以实施”，这意味着什么？</p>
+  <button class="opt" data-correct="false">现在应该立刻开始执行 #1 这张大票</button>
+  <button class="opt" data-correct="true">它是无阻塞的规格，其下的票可逐步开工</button>
+  <button class="opt" data-correct="false">它已经被别人认领，你不需要再管它了</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">2. spec（规格）和 ticket（实施票）最大的区别是什么？</p>
+  <button class="opt" data-correct="false">规格用英文编号，实施票用中文编号这样区分</button>
+  <button class="opt" data-correct="false">规格只能由人写，实施票只允许交给 AI 来写</button>
+  <button class="opt" data-correct="true">规格是回答“最终成什么样”的容器，实施票是能做完的一小块</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">3. 什么时候才算“实施完了 #1”？</p>
+  <button class="opt" data-correct="true">它下面所有子票都做完、验收并关闭之后</button>
+  <button class="opt" data-correct="false">只要读懂 #1 的正文就算已经实施完毕</button>
+  <button class="opt" data-correct="false">只要把 #1 标记成关闭状态就自动算完成</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="lesson-footer">
+  <h3>这节课你拿到了什么</h3>
+  <p>你能一眼分辨 spec 和 ticket，不会再被“可以实施”的提示带偏去“做规格”。你也知道了 ticket 关闭的唯一标准是<b>验收标准全绿</b>，以及关一张票如何让下一张票解锁——这正是五步循环“走下一圈”的齿轮。</p>
+
+  <h3>想再深入，读这个（一手资源）</h3>
+  <p>👉 <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues" target="_blank" rel="noopener">GitHub 官方 ——《Adding sub-issues》</a>。这就是 #1 和 #2–#24 之间“父子”关系的官方定义，看完你就明白“规格是容器”在 GitHub 上是怎么落地成字段的。</p>
+
+  <h3>下一课</h3>
+  <p>➡️ 第 6 课 · 认领 #2 并建出第一个能跑的安卓工程：真的跑 <code>gh issue edit 2 --add-assignee @me</code>，然后从“写一个会失败的测试”起手。</p>
+
+  <div class="ask">
+    💬 <strong>随时问我。</strong>如果“#2 已开始执行”其实是你已经在别处动手了，告诉我做在哪一步了，我帮你对齐；如果你还没认领，说一句“帮我认领 #2”就行。别自己拿不准还往下冲。
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

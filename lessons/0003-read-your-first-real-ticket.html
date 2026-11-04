@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 课 · 读懂你仓库里第一张真票</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+
+<p class="lesson-kicker">Lesson 03 · 读懂</p>
+<h1>读懂你仓库里第一张真票</h1>
+<p class="subtitle">今天不讲新命令。今天练一件更硬的本事：盯着一张真实的 issue，看出它好在哪、坑在哪。</p>
+
+<h2>先看事实：你的仓库已经有票了</h2>
+
+<p>上一课结束我打开了你的 GitHub 仓库，发现里面已经有两张票（不是我建的，是之前就存在）：</p>
+
+<table>
+  <thead><tr><th>票号</th><th>类型</th><th>标题</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td>#1</td><td>规格 spec</td><td>Android 10+ 语音提醒应用首版：离线识别、可靠闹钟、待办、四象限与番茄</td><td><code>ready-for-agent</code></td></tr>
+    <tr><td>#2</td><td>实施票 ticket</td><td>最小闭环：随包离线转写一条事项并触发系统闹钟</td><td><code>ready-for-agent</code>，无阻塞，可立即开工</td></tr>
+  </tbody>
+</table>
+
+<p>而 <strong>#2 是 #1 的子票</strong>（它开头写着「Parent #1」）。也就是说：#1 是“整个 App 要成什么样”的大规格，#2 是“先做出最小可跑的一小块”的第一个实施票。<strong>#2 正好是第 2 课讲的“好 issue”的教科书样板。</strong>我们就用它当教材。</p>
+
+<div class="callout">
+  <span class="label">顺便记住这两个词</span>
+  <strong>spec（规格）</strong>：一张大票，描述“整个东西要成什么样”，通常很大。<strong>ticket（实施票）</strong>：挂在 spec 底下、一次能做完的小块。看 #2 开头那行 <code>Parent #1</code>，就是“我是 #1 的孩子”。
+</div>
+
+<h2>逐段拆开 #2，看四个零件在不在</h2>
+
+<p>下面左边是 #2 原文，右边是我给你标的“这是哪个零件”。<strong>试着先自己读一遍原文，再看右栏。</strong></p>
+
+<table>
+  <thead><tr><th style="width:52%">原文（#2 摘录）</th><th>这是哪个零件 / 好不好</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>标题：<strong>最小闭环：随包离线转写一条事项并触发系统闹钟</strong></td>
+      <td><strong>标题 ✓</strong> 用“最小闭环”点明范围，一句话说清做三件事（录音转写→存事项→闹钟）。不是名词堆。</td>
+    </tr>
+    <tr>
+      <td>## 目的：<br>尽早把两项核心技术风险串成可运行路径，而非先做空工程或纯模型层。</td>
+      <td><strong>目的 ✓</strong> 说清了“为什么先做这块”——先验证最危险的两个技术点，而不是先搭空架子。这是成熟做法。</td>
+    </tr>
+    <tr>
+      <td>## 验收标准：<br>6 条，每条以 <code>- [ ]</code> 开头，能逐条打勾。</td>
+      <td><strong>验收标准 ✓✓</strong> 这是灵魂。等下我们逐条看。</td>
+    </tr>
+    <tr>
+      <td>## 边界：<br>只做一条非重复事项、一次指定时刻闹钟；不做 AI、复杂时间…</td>
+      <td><strong>边界 ✓</strong> 明确划掉了范围外的东西，防 AI 顺手乱加。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>四个零件齐全。这是一张<strong>质量很高</strong>的票——你以后自己拆票，就照它这个长相拆。</p>
+
+<h2>验收标准为什么值钱：逐条看</h2>
+
+<p>#2 的六条验收标准，每一条都在防一个具体的“假成功”：</p>
+
+<ol class="steps">
+  <li><strong>能构建、minSdk=29、模型许可已记录</strong> —— 防“根本没打包进去模型就说做完了”。</li>
+  <li><strong>断网冷启动、用真实随包模型识别固定普通话音频，非假转写、非首次下载</strong> —— 这句最关键。“非假转写”四个字直接堵死了“AI 假装识别成功”这种糊弄。</li>
+  <li><strong>手选时间→持久化；取消确认不创建；重开可见</strong> —— 防“点保存其实没存”。</li>
+  <li><strong>系统 PendingIntent 闹钟真实触发…不是应用内计时器模拟</strong> —— 又一个“非假成功”。应用自己计时假装响铃是常见偷懒。</li>
+  <li><strong>权限最小检查；未具备权限时不误报已安排</strong> —— 防“其实没权限，界面上却显示已安排”。</li>
+  <li><strong>可重复的演示步骤 + 集成测试结果</strong> —— 要证据，不要口头保证。</li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">这正是你“读懂”的核心能力</span>
+  好的验收标准<strong>每一条都在描述一个“假成功”并堵住它</strong>。看到“非假转写”“不是应用内计时器模拟”这种措辞，你该立刻明白：作者预判了 AI 最可能糊弄的地方。你以后要做的，就是像这样把“糊弄点”提前写进验收标准。
+</div>
+
+<h2>现在轮到你了：发现一个该由你拍板的分歧</h2>
+
+<p>把 #2 的边界读完，你会发现一句关键的话：</p>
+
+<p style="padding-left:1em;border-left:3px solid var(--rule);color:var(--ink-soft);font-style:italic;">
+「真机验收在独立后继票，本票交付可测 APK 及模拟器证据，不声称真机已验证。」
+</p>
+
+<p>意思：<strong>#2 这张票只要求“在模拟器上能跑”，真机验收要另开一张票。</strong>而上一轮你告诉我：<strong>你有一台真实的安卓手机。</strong>这里就出现了真实的岔路——是一个完美的“说不 / 说改”练习点。两条路各有道理，你来选：</p>
+
+<table>
+  <thead><tr><th>选项</th><th>好处</th><th>代价</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>A. 保持原样</strong>：先模拟器跑通，真机另开票</td>
+      <td>块更小、更快拿到第一个“跑起来”的胜利。</td>
+      <td>模拟器能过、真机照样翻车（尤其闹钟/权限），得多走一轮。</td>
+    </tr>
+    <tr>
+      <td><strong>B. 改这张票</strong>：把“真机也能响”加进 #2 验收</td>
+      <td>第一个闭环就在你自己的手机上响，一次验证到底。</td>
+      <td>这张票变大、变慢，第一次“跑通”要更久。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="sidenote">这里的教学点不在“哪个对”，而在：<strong>一张票的边界不是天书，你能看懂、能质疑、能改。</strong>“说改”是这套工具链里最值钱的人类动作之一。</p>
+
+<h2>小测验：你读懂了没有</h2>
+
+<div class="quiz" data-quiz>
+  <p class="q">1. #2 开头那行「Parent #1」是什么意思？</p>
+  <button class="opt" data-correct="false">这张票的编号其实是 1，只是显示成了 2</button>
+  <button class="opt" data-correct="false">做这张票之前必须先等 1 号票全部关闭</button>
+  <button class="opt" data-correct="true">2 号票是 1 号那张大规格底下挂着的子票</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">2. 验收标准里「非假转写」「不是应用内计时器模拟」这类措辞，作用是什么？</p>
+  <button class="opt" data-correct="true">预判并堵死 AI 最可能的糊弄点</button>
+  <button class="opt" data-correct="false">只是给程序写注释时沿用的措辞习惯</button>
+  <button class="opt" data-correct="false">表示这些功能可以留到版本更晚再做</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="quiz" data-quiz>
+  <p class="q">3. 你读到 #2「真机验收在独立后继票」，而你正好有安卓真机。这时你该做什么？</p>
+  <button class="opt" data-correct="false">忽略它，票上怎么写就怎么做，别多嘴</button>
+  <button class="opt" data-correct="false">把这张票直接删掉，重新写一张更大的</button>
+  <button class="opt" data-correct="true">判断要不要把真机验收改并进这张票，并说明理由</button>
+  <p class="feedback"></p>
+</div>
+
+<div class="lesson-footer">
+  <h3>这节课你拿到了什么</h3>
+  <p>你能拿着一张真实的 issue，逐段说出四个零件在不在、好在哪；而且你知道<strong>验收标准 = 提前堵住“假成功”</strong>。更重要的是：你发现了一张票里的真实分歧，并知道“说改”是你该做的动作——我已经准备好了，只要你下决定，我就能真的去改 GitHub 上那张 #2。</p>
+
+  <h3>想再深入，读这个（一手资源）</h3>
+  <p>👉 <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-an-issue" target="_blank" rel="noopener">GitHub 官方 ——《Creating an issue》</a>。看标题、正文、任务清单（<code>- [ ]</code>）分别怎么用——你刚在 #2 里看到的，就是这些字段的组合。</p>
+
+  <h3>下一课</h3>
+  <p>➡️ 第 4 课 · 动手改一张票：把你对 #2 的决定（A 还是 B）真的写进 GitHub，并学会给票打标签、指派人、看它“能不能开工”。<em>（这一课需要你先在下面做出 A/B 选择。）</em></p>
+
+  <div class="ask">
+    💬 <strong>随时问我。</strong>看不懂 #2 里任何一句（“PendingIntent”是什么？“持久化”是什么？）都可以直接问我，我用大白话再讲。也告诉我你选 A 还是 B——下一课我们就真的动手改票。
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

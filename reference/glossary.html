@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查 · 开发核心术语表</title>
+<link rel="stylesheet" href="../assets/course.css">
+<style>
+  /* 参考文档稍密一点，更耐翻阅 */
+  body { font-size: 17px; }
+  .term { margin: 0 0 1.1rem; padding-left: 0; }
+  .term dt { font-weight: 700; font-size: 1.02rem; }
+  .term dt .en { font-weight: 400; color: var(--ink-soft); font-size: 0.82rem; font-family: ui-monospace, Consolas, monospace; margin-left: 0.4rem; }
+  .term dd { margin: 0.25rem 0 0; color: var(--ink-soft); }
+  .term dd .app { color: var(--accent); }
+  .toc { font-size: 0.9rem; column-count: 2; column-gap: 2rem; margin: 1rem 0 2rem; }
+  .toc a { display: block; border: none; }
+</style>
+</head>
+<body>
+
+<p class="lesson-kicker">Reference · 速查表</p>
+<h1>开发核心术语表</h1>
+<p class="subtitle">这套课程里反复出现的词，都在这里。以后忘了就回来查，不用重听课。</p>
+
+<div class="toc">
+  <a href="#loop">五步循环</a>
+  <a href="#issue">issue（工单/票）</a>
+  <a href="#acceptance">验收标准</a>
+  <a href="#map">map（探索地图）</a>
+  <a href="#triage">triage（分诊/分类）</a>
+  <a href="#tdd">TDD（测试驱动）</a>
+  <a href="#test">测试 test</a>
+  <a href="#red-green">红-绿-重构</a>
+  <a href="#review">code review（代码复查）</a>
+  <a href="#domain">术语表 GLOSSARY</a>
+  <a href="#grill">grilling（拷问）</a>
+  <a href="#commit">commit（提交）</a>
+</div>
+
+<h2 id="loop">五步循环</h2>
+<dl class="term"><dt>五步循环<span class="en">the loop</span></dt>
+<dd>软件开发可以重复执行的循环：<strong>想清楚 → 拆小 → 做一块 → 验一块 → 复查</strong>，然后回到第一步。<span class="app">你的整个 App 就是这一圈圈跑出来的。</span>（见 <a href="../lessons/0001-the-five-step-loop.html">第 1 课</a>）</dd></dl>
+
+<h2 id="issue">issue（工单 / 票）</h2>
+<dl class="term"><dt>issue<span class="en">ticket</span></dt>
+<dd>一件足够小、小到能一次做完、能明确判断“做完没有”的事。四个零件：<strong>标题（一句动词）、目的（为什么）、验收标准（怎么算完）、边界（什么不做）</strong>。在本仓库里，issue 真实存在于 GitHub 上，用 <code>gh</code> 命令操作。<span class="app">“点麦克风开始录音、再点结束并转写”就是一张好票。</span>（见 <a href="../lessons/0002-issue-as-a-ticket.html">第 2 课</a>）</dd></dl>
+
+<h2 id="acceptance">验收标准</h2>
+<dl class="term"><dt>验收标准<span class="en">acceptance criteria</span></dt>
+<dd>issue 里能<strong>逐条打勾</strong>的检查项：勾满即完成，勾不满就继续改。它把“做完没有”从主观争吵变成客观检查。<span class="app">这是 issue 里最值钱的一栏。</span></dd></dl>
+
+<h2 id="map">map（探索地图）</h2>
+<dl class="term"><dt>map / wayfinder<span class="en">map</span></dt>
+<dd>当一个目标太大、路线看不清时，先开一张“地图”，把路线拆成若干工单挂在下面，随着探索逐步补全。map 是容器，下面的小票才是活。工具链里用 <code>wayfinder</code>。<span class="app">“整个 App 的路线图”就可以是一张 map。</span></dd></dl>
+
+<h2 id="triage">triage（分诊 / 分类）</h2>
+<dl class="term"><dt>triage<span class="en">triage</span></dt>
+<dd>给收进来的 issue 贴标签、定状态，决定它是否“信息够了、能开工”。本仓库的五个标签：<code>needs-triage</code>（待评估）、<code>needs-info</code>（等补充）、<code>ready-for-agent</code>（可交给 agent）、<code>ready-for-human</code>（需人做）、<code>wontfix</code>（不做）。定义见 <code>docs/agents/triage-labels.md</code>。</dd></dl>
+
+<h2 id="tdd">TDD（测试驱动开发）</h2>
+<dl class="term"><dt>TDD<span class="en">test-driven development</span></dt>
+<dd>先写一个<strong>会失败的测试</strong>（描述“应该怎样”），再写最少的代码让它通过，最后整理代码。好处：你总有一个客观标准判断“做对了没有”。<span class="app">“点麦克风应开始录音”可以先写成一个测试，再去实现。</span></dd></dl>
+
+<h2 id="test">测试 test</h2>
+<dl class="term"><dt>测试<span class="en">test</span></dt>
+<dd>一段自动运行的检查代码：给它输入，断言（assert）输出应是某个值。通过=绿，失败=红。<strong>它证明“真的按需求工作”，而不是“看起来能跑”。</strong></dd></dl>
+
+<h2 id="red-green">红-绿-重构</h2>
+<dl class="term"><dt>红-绿-重构<span class="en">red-green-refactor</span></dt>
+<dd>TDD 的三拍：<strong>红</strong>（写个失败测试）→ <strong>绿</strong>（写代码让它通过）→ <strong>重构</strong>（在不改变行为的前提下把代码整理干净）。</dd></dl>
+
+<h2 id="review">code review（代码复查）</h2>
+<dl class="term"><dt>code review<span class="en">review</span></dt>
+<dd>回头看一遍改动，两条轴：<strong>规范轴</strong>（符不符合本仓库写明的编码规范？）和<strong>需求轴</strong>（符不符合发起它的 issue/spec？）。工具链的 <code>code-review</code> 会并行跑这两条轴再并列报告。<span class="app">这是你“说不 / 说改 / 说继续”的地方。</span></dd></dl>
+
+<h2 id="domain">术语表 GLOSSARY</h2>
+<dl class="term"><dt>术语表<span class="en">GLOSSARY / ubiquitous language</span></dt>
+<dd>项目里每个领域词的<strong>唯一定义</strong>，防止同一个词各说各话。你仓库根目录的 <code>GLOSSARY.md</code> 已经写了「事项 / 提醒 / 事项草稿 / 四象限」等定义，还有“避免”的同义词。<em>写票、命名、讨论时都要用这里的词。</em></dd></dl>
+
+<h2 id="grill">grilling（拷问）</h2>
+<dl class="term"><dt>grilling<span class="en">grill</span></dt>
+<dd>让 AI 对你的方案/想法<strong>连环发难</strong>，逼出没想清楚的漏洞和模糊边界。用在“想清楚”那一步，比独自冥思有效得多。<span class="app">需求访谈末尾那堆「待明确」，正好拿来被 grilling。</span></dd></dl>
+
+<h2 id="commit">commit（提交）</h2>
+<dl class="term"><dt>commit<span class="en">commit</span></dt>
+<dd>把当前改动<strong>打一个快照</strong>存进 Git 历史，附带一句说明。像游戏存档：以后能回退到这一刻。一次有意义的改动对应一次 commit。</dd></dl>
+
+<div class="lesson-footer">
+  <div class="ask">
+    💬 <strong>随时问我。</strong>这张表里哪个词你还是懵的，告诉我，我用你 App 里的实例讲透。术语不求背，求“一听到就知道指什么”。
+  </div>
+</div>
+</body>
+</html>

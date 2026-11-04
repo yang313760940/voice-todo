@@ -1,6 +1,6 @@
 package com.voicetodo.domain
 
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * 提醒调度接缝：真实实现调用系统 AlarmManager（setAlarmClock + PendingIntent），
@@ -10,7 +10,7 @@ import java.time.LocalDateTime
  */
 interface ReminderScheduler {
     /** 为某事项在某时刻安排一次性系统闹钟；成功排入返回 true。 */
-    fun schedule(itemId: String, title: String, at: LocalDateTime): Boolean
+    fun schedule(itemId: String, title: String, at: Instant, revision: Long): Boolean
 
     /** 取消某事项的全部未来闹钟。 */
     fun cancel(itemId: String)

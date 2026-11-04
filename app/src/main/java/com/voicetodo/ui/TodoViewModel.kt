@@ -16,8 +16,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
 
 /** 录音状态机。 */
 enum class RecordState { Idle, Recording, Transcribing }
@@ -27,7 +29,7 @@ data class UiState(
     val recordState: RecordState = RecordState.Idle,
     val draftText: String = "",
     val draftHasTime: Boolean = false,
-    val draftTime: LocalDateTime? = null,
+    val draftTime: Instant? = null,
     val message: String? = null,
     val capabilities: ReminderCapabilities? = null,
 )
@@ -41,6 +43,7 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app as VoiceTodoApp
     private val transcriber: OfflineTranscriber = SherpaOfflineTranscriber(appContext)
     private val recorder = PcmRecorder()
+    private val zoneId: ZoneId = ZoneId.systemDefault()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -54,7 +57,9 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refresh() {
-        _state.value = _state.value.copy(items = appContext.useCases.listItems())
+        viewModelScope.launch {
+            _state.value = _state.value.copy(items = appContext.useCases.listItems())
+        }
     }
 
     fun refreshCapabilities() {
@@ -108,10 +113,10 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 用户手选一个未来时间。 */
     fun onPickTime(hour: Int, minute: Int) {
-        val now = LocalDateTime.now()
+        val now = LocalDateTime.now(zoneId)
         var at = LocalDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute))
         if (!at.isAfter(now)) at = at.plusDays(1)
-        _state.value = _state.value.copy(draftHasTime = true, draftTime = at)
+        _state.value = _state.value.copy(draftHasTime = true, draftTime = at.atZone(zoneId).toInstant())
     }
 
     fun onSave() {
@@ -121,19 +126,22 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = s.copy(message = "请先选择提醒时间")
             return
         }
-        try {
-            val result = appContext.useCases.confirmDraft(s.draftText, at)
-            if (!result.scheduled) {
-                _state.value = s.copy(message = "事项已保存，但提醒未就绪（缺精确闹钟权限）")
-            } else {
-                _state.value = s.copy(
+        viewModelScope.launch {
+            try {
+                val result = appContext.useCases.confirmDraft(s.draftText, at)
+                val message = when (result.outcome) {
+                    com.voicetodo.domain.ReminderOutcome.NotRequested -> "事项已保存（未设置提醒）"
+                    com.voicetodo.domain.ReminderOutcome.Scheduled -> "已保存并安排提醒"
+                    com.voicetodo.domain.ReminderOutcome.NotReady -> "事项已保存，但提醒未就绪（缺精确闹钟权限）"
+                }
+                _state.value = _state.value.copy(
                     draftText = "", draftHasTime = false, draftTime = null,
-                    message = "已保存并安排提醒",
+                    message = message,
                 )
+                _state.value = _state.value.copy(items = appContext.useCases.listItems())
+            } catch (e: IllegalArgumentException) {
+                _state.value = _state.value.copy(message = e.message ?: "保存失败")
             }
-            refresh()
-        } catch (e: IllegalArgumentException) {
-            _state.value = s.copy(message = e.message ?: "保存失败")
         }
     }
 
@@ -144,8 +152,10 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onDelete(id: String) {
-        appContext.useCases.deleteItem(id)
-        refresh()
+        viewModelScope.launch {
+            appContext.useCases.deleteItem(id)
+            _state.value = _state.value.copy(items = appContext.useCases.listItems())
+        }
     }
 
     /** 供仪器测试注入固定音频并识别（跳过麦克风）。 */

@@ -10,6 +10,9 @@ import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.AlarmActionReceiver
 import com.voicetodo.alarm.AlarmReceiver
 import com.voicetodo.alarm.SystemReminderScheduler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -17,15 +20,23 @@ import java.time.ZoneId
 class AlarmTestDriverReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as VoiceTodoApp
+        if (intent.action == "com.voicetodo.debug.EXIT") {
+            Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)
+            return
+        }
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+        try {
         when (intent.action) {
             "com.voicetodo.debug.SCHEDULE" -> {
                 val at = LocalDateTime.now().plusSeconds(45).withNano(0)
-                val saved = app.useCases.confirmDraft("锁屏响铃验收", at)
-                resultCode = if (saved.scheduled) 0 else 1
-                resultData = "scheduledItem=${saved.item.id} fireAt=${at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()}"
+                val atInstant = at.atZone(ZoneId.systemDefault()).toInstant()
+                val saved = app.useCases.confirmDraft("锁屏响铃验收", atInstant)
+                pending.resultCode = if (saved.outcome == com.voicetodo.domain.ReminderOutcome.Scheduled) 0 else 1
+                pending.resultData = "scheduledItem=${saved.item.id} fireAt=${atInstant.toEpochMilli()}"
             }
             "com.voicetodo.debug.CLEANUP" -> {
-                val id = intent.getStringExtra("itemId") ?: return
+                val id = intent.getStringExtra("itemId") ?: return@launch
                 val nm = context.getSystemService(android.app.NotificationManager::class.java)
                 if (nm.activeNotifications.any { it.id == AlarmReceiver.notificationIdFor(id) }) {
                     AlarmActionReceiver().onReceive(context, Intent().apply {
@@ -35,10 +46,12 @@ class AlarmTestDriverReceiver : BroadcastReceiver() {
                 }
                 app.useCases.deleteItem(id)
             }
-            "com.voicetodo.debug.EXIT" -> {
-                // 让广播完成后终止自身；系统包 stopped 标志和已注册闹钟均不受影响。
-                Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)
-            }
+        }
+        } catch (e: Exception) {
+            pending.resultCode = 1
+            pending.resultData = e.message
+            android.util.Log.e("AlarmTestDriver", "Driver failed", e)
+        } finally { pending.finish() }
         }
     }
 }

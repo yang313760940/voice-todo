@@ -11,7 +11,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.voicetodo.domain.ReminderScheduler
 import com.voicetodo.domain.TodoItem
-import java.time.LocalDateTime
+import java.time.Instant
 import java.time.ZoneId
 
 /**
@@ -52,12 +52,18 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         return ReminderCapabilities(exact, notif, mic)
     }
 
-    private fun alarmPendingIntent(itemId: String, title: String, atMillis: Long): PendingIntent {
+    private fun alarmPendingIntent(
+        itemId: String,
+        title: String,
+        atMillis: Long,
+        revision: Long,
+    ): PendingIntent {
         val intent = Intent(context, AlarmReceiver::class.java).apply {
             action = ACTION_FIRE
             putExtra(EXTRA_ITEM_ID, itemId)
             putExtra(EXTRA_TITLE, title)
             putExtra(EXTRA_AT_MILLIS, atMillis)
+            putExtra(EXTRA_REVISION, revision)
             // 每个事项独立的 data，确保 PendingIntent 区分且可精确取消
             data = android.net.Uri.parse("voicetodo://alarm/$itemId")
         }
@@ -66,12 +72,12 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
     }
 
     @SuppressLint("MissingPermission")
-    override fun schedule(itemId: String, title: String, at: LocalDateTime): Boolean {
+    override fun schedule(itemId: String, title: String, at: Instant, revision: Long): Boolean {
         // 精确闹钟权限/能力预检：不具备时不打系统调用，如实返回 false。
         if (!capabilities().canScheduleExactAlarm) return false
 
-        val atMillis = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val pi = alarmPendingIntent(itemId, title, atMillis)
+        val atMillis = at.toEpochMilli()
+        val pi = alarmPendingIntent(itemId, title, atMillis, revision)
         // setAlarmClock 需要一个用户可见的 showIntent（点系统闹钟图标进入应用）
         val showIntent = Intent(context, com.voicetodo.MainActivity::class.java)
         val showPi = PendingIntent.getActivity(
@@ -104,11 +110,12 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
      * 对账：把仍存在且未来有效的提醒重新排入系统（冷启动/开机/权限恢复后调用）。
      * 过期提醒不补响——票边界内仅一条指定时刻事项，过期即不再安排。
      */
-    fun reconcile(items: List<TodoItem>, now: LocalDateTime) {
+    fun reconcile(items: List<TodoItem>, now: Instant) {
         if (!capabilities().canScheduleExactAlarm) return
         for (item in items) {
-            if (item.remindAt.isAfter(now)) {
-                schedule(item.id, item.title, item.remindAt)
+            val remindAt = item.remindAt
+            if (item.completedAt == null && remindAt != null && remindAt.isAfter(now)) {
+                schedule(item.id, item.title, remindAt, item.reminderRevision)
             }
         }
     }
@@ -118,6 +125,7 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         const val EXTRA_ITEM_ID = "extra_item_id"
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_AT_MILLIS = "extra_at_millis"
+        const val EXTRA_REVISION = "extra_revision"
 
         // 用低 22 位保持在 PendingIntent requestCode 的可用范围，减少不同事项碰撞。
         private const val SHOW_REQUEST_OFFSET = 0x200000

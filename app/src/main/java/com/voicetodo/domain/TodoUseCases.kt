@@ -1,19 +1,49 @@
 package com.voicetodo.domain
 
-import java.time.LocalDateTime
+import java.time.Instant
+import java.time.LocalDate
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+enum class ReminderOutcome {
+    /** 用户没有设置提醒，不需要系统调度。 */
+    NotRequested,
+    /** 提醒已真正排入系统。 */
+    Scheduled,
+    /** 用户设置了提醒，但权限或系统限制导致未排入。 */
+    NotReady,
+}
 
 /** 保存/取消结账结果：区分“已保存”与“提醒是否已成功排入系统”。 */
 data class ConfirmResult(
     val item: TodoItem,
-    /** 提醒是否**真正**排入系统；权限缺失或系统拒绝时为 false。 */
-    val scheduled: Boolean,
+    val outcome: ReminderOutcome,
+)
+
+data class RestoreResult(
+    val item: TodoItem,
+    val outcome: ReminderOutcome,
+    val pastReminderCleared: Boolean,
+)
+
+data class TodoEdit(
+    val title: String,
+    val plannedDate: LocalDate?,
+    val dueAt: Instant?,
+    val remindAt: Instant?,
+)
+
+data class UpdateResult(
+    val item: TodoItem,
+    val reminderChanged: Boolean,
+    val outcome: ReminderOutcome?,
 )
 
 /**
  * 统一用例入口（应用层 seam）。界面通过它读取列表和提交用户操作；
  * 失败（空标题、过去时刻）抛 [IllegalArgumentException]，调用方在保存前拦截。
  *
- * 保存与提醒分别反馈：即使提醒未就绪，事项仍保存，[ConfirmResult.scheduled] 如实返回 false，
+ * 保存与提醒分别反馈：即使提醒未就绪，事项仍保存，[ConfirmResult.outcome] 如实返回 NotReady，
  * 调用方据此提示“提醒未就绪”，绝不误报已安排。
  */
 class TodoUseCases(
@@ -21,19 +51,79 @@ class TodoUseCases(
     private val scheduler: ReminderScheduler,
     private val clock: Clock,
 ) {
-    fun listItems(): List<TodoItem> = repo.all()
+    private val mutations = Mutex()
+    suspend fun listItems(): List<TodoItem> = repo.all()
+    suspend fun listIncomplete(): List<TodoItem> = repo.incomplete()
+    suspend fun listCompleted(): List<TodoItem> = repo.completed()
+    suspend fun findItem(id: String): TodoItem =
+        repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+    suspend fun wasDelivered(item: TodoItem): Boolean =
+        repo.deliveredAt(item.id, item.reminderRevision) != null
+
+    suspend fun reconcileReminders() = mutations.withLock {
+        val now = clock.now()
+        for (item in repo.incomplete()) {
+            val at = item.remindAt
+            if (at != null && at.isAfter(now) && !wasDelivered(item)) schedule(item)
+        }
+    }
+
+    suspend fun updateItem(id: String, edit: TodoEdit): UpdateResult = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        require(item.completedAt == null) { "已完成事项请先恢复再编辑" }
+        val title = edit.title.trim()
+        require(title.isNotEmpty()) { "标题不能为空" }
+        val changed = edit.remindAt != item.remindAt
+        if (changed) edit.remindAt?.let {
+            require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
+        }
+        val updated = item.copy(
+            title = title, plannedDate = edit.plannedDate, dueAt = edit.dueAt,
+            remindAt = edit.remindAt,
+            reminderRevision = item.reminderRevision + if (changed) 1 else 0,
+        )
+        repo.save(updated)
+        if (!changed) return@withLock UpdateResult(updated, false, null)
+        scheduler.cancel(id)
+        val outcome = schedule(updated)
+        UpdateResult(updated, true, outcome)
+    }
+
+    private fun schedule(item: TodoItem): ReminderOutcome {
+        val at = item.remindAt ?: return ReminderOutcome.NotRequested
+        return if (scheduler.schedule(item.id, item.title, at, item.reminderRevision)) {
+            ReminderOutcome.Scheduled
+        } else ReminderOutcome.NotReady
+    }
 
     /** 用户确认一个草稿：校验 → 持久化 → 请求系统闹钟（按真实结果反馈）。 */
-    fun confirmDraft(title: String, remindAt: LocalDateTime): ConfirmResult {
+    suspend fun confirmDraft(
+        title: String,
+        remindAt: Instant? = null,
+        plannedDate: LocalDate? = null,
+        dueAt: Instant? = null,
+    ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
-        require(remindAt.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
+        remindAt?.let { require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" } }
 
-        val item = TodoItem(title = clean, remindAt = remindAt, createdAt = clock.now())
+        val item = TodoItem(
+            title = clean,
+            remindAt = remindAt,
+            plannedDate = plannedDate,
+            dueAt = dueAt,
+            createdAt = clock.now(),
+        )
         repo.save(item)
-        // 调度失败（缺权限/系统拒绝）不抛异常、不回滚事项，但如实返回 false。
-        val scheduled = scheduler.schedule(item.id, item.title, item.remindAt)
-        return ConfirmResult(item, scheduled = scheduled)
+        // 调度失败（缺权限/系统拒绝）不抛异常、不回滚事项，但如实返回 NotReady。
+        val outcome = if (remindAt == null) {
+            ReminderOutcome.NotRequested
+        } else if (scheduler.schedule(item.id, item.title, remindAt, item.reminderRevision)) {
+            ReminderOutcome.Scheduled
+        } else {
+            ReminderOutcome.NotReady
+        }
+        ConfirmResult(item, outcome)
     }
 
     /** 用户取消确认：不创建事项、不调度。 */
@@ -41,8 +131,74 @@ class TodoUseCases(
         // 无副作用
     }
 
+    /** 标记事项完成并撤销提醒；已完成事项保持原完成时刻，并再次确保提醒已取消。 */
+    suspend fun completeItem(id: String): TodoItem = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        if (item.completedAt != null) {
+            scheduler.cancel(id)
+            return@withLock item
+        }
+
+        val completed = item.copy(
+            completedAt = clock.now(),
+            reminderRevision = item.reminderRevision + 1,
+        )
+        repo.save(completed)
+        scheduler.cancel(id)
+        completed
+    }
+
+    suspend fun restoreItem(id: String): RestoreResult = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        if (item.completedAt == null) {
+            return@withLock RestoreResult(
+                item = item,
+                outcome = ReminderOutcome.NotRequested,
+                pastReminderCleared = false,
+            )
+        }
+
+        val now = clock.now()
+        val remindAt = item.remindAt
+        if (remindAt != null && !remindAt.isAfter(now)) {
+            val cleared = item.copy(
+                completedAt = null,
+                remindAt = null,
+                reminderRevision = item.reminderRevision + 1,
+            )
+            repo.save(cleared)
+            scheduler.cancel(id)
+            return@withLock RestoreResult(
+                item = cleared,
+                outcome = ReminderOutcome.NotRequested,
+                pastReminderCleared = true,
+            )
+        }
+
+        val restored = item.copy(
+            completedAt = null,
+            reminderRevision = item.reminderRevision + 1,
+        )
+        repo.save(restored)
+        scheduler.cancel(id)
+        val outcome = if (remindAt == null) {
+            ReminderOutcome.NotRequested
+        } else if (
+            scheduler.schedule(restored.id, restored.title, remindAt, restored.reminderRevision)
+        ) {
+            ReminderOutcome.Scheduled
+        } else {
+            ReminderOutcome.NotReady
+        }
+        RestoreResult(
+            item = restored,
+            outcome = outcome,
+            pastReminderCleared = false,
+        )
+    }
+
     /** 删除事项并取消其未来闹钟。 */
-    fun deleteItem(id: String) {
+    suspend fun deleteItem(id: String) = mutations.withLock {
         repo.delete(id)
         scheduler.cancel(id)
     }

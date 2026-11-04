@@ -10,6 +10,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import com.voicetodo.VoiceTodoApp
+import kotlinx.coroutines.*
+import java.time.Instant
 
 /**
  * 持续响铃前台服务：循环播放本地提示音；默认 60 秒后停止发声并保留通知。
@@ -20,31 +23,60 @@ class RingingService : Service() {
     private var player: MediaPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var stopRunnable: Runnable? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var latestStartId = 0
+    private var activeToken: ReminderToken? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val itemId = intent?.getStringExtra(SystemReminderScheduler.EXTRA_ITEM_ID) ?: "unknown"
-        val title = intent?.getStringExtra(SystemReminderScheduler.EXTRA_TITLE) ?: "提醒"
-
-        val notification = AlarmNotification.build(this, itemId, title)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(AlarmReceiver.notificationIdFor(itemId), notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(AlarmReceiver.notificationIdFor(itemId), notification)
+        val token = ReminderToken.from(intent)
+        if (token == null) { stopSelf(startId); return START_NOT_STICKY }
+        if (token == activeToken) return START_NOT_STICKY
+        latestStartId = startId
+        scope.launch {
+            var foreground = false
+            try {
+                val repo = (application as VoiceTodoApp).repository
+                val delivered = repo.deliverReminder(token.itemId, token.revision, token.atMillis, Instant::now) { item ->
+                    withContext(Dispatchers.Main.immediate) {
+                        if (startId != latestStartId) return@withContext false
+                        val notification = AlarmNotification.build(this@RingingService, item.id, item.title)
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                startForeground(AlarmReceiver.notificationIdFor(item.id), notification,
+                                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                            } else {
+                                startForeground(AlarmReceiver.notificationIdFor(item.id), notification)
+                            }
+                            foreground = true
+                            activeToken = token
+                            startRinging()
+                            stopRunnable?.let { handler.removeCallbacks(it) }
+                            val r = Runnable { stopSoundOnly() }
+                            stopRunnable = r
+                            handler.postDelayed(r, DEFAULT_RING_MILLIS)
+                            true
+                        } catch (e: Exception) {
+                            android.util.Log.w("RingingService", "startForeground failed", e)
+                            AlarmReceiver.showFallbackNotification(this@RingingService, item)
+                        }
+                    }
+                }
+                if (!delivered || !foreground) stopSelfResult(startId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("RingingService", "Validation/delivery failed", e)
+                stopSelfResult(startId)
+            }
         }
-
-        startRinging()
-        // 默认最多 60 秒发声，随后停止声音并保留通知
-        stopRunnable?.let { handler.removeCallbacks(it) }
-        val r = Runnable { stopSoundOnly() }
-        stopRunnable = r
-        handler.postDelayed(r, DEFAULT_RING_MILLIS)
         return START_NOT_STICKY
     }
 
     private fun startRinging() {
+        player?.release()
+        player = null
         try {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -61,7 +93,9 @@ class RingingService : Service() {
                 start()
             }
         } catch (e: Exception) {
+            player?.release()
             player = null
+            android.util.Log.w("RingingService", "Audio playback failed", e)
         }
     }
 
@@ -79,6 +113,7 @@ class RingingService : Service() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         stopRunnable?.let { handler.removeCallbacks(it) }
         try {
             player?.stop()

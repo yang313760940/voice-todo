@@ -8,11 +8,12 @@ import com.voicetodo.alarm.AlarmReceiver
 import com.voicetodo.speech.SherpaOfflineTranscriber
 import com.voicetodo.speech.TranscriptResult
 import com.voicetodo.speech.WavReader
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * 端到端演示（断网 + 冷启动路径）：离线转写 → 保存一条约 40 秒后到点的事项 →
@@ -42,9 +43,9 @@ class DemoTicket2EndToEndTest {
         android.util.Log.i("DemoTicket2", "OFFLINE_TRANSCRIPT=$text")
 
         // 3) 保存一条 40 秒后到点的真实系统闹钟事项（标题用识别文字）
-        val at = LocalDateTime.now().plusSeconds(40).withNano(0)
-        val saved = app.useCases.confirmDraft(text.take(40), at)
-        assertTrue("应已安排系统闹钟", saved.scheduled)
+        val at = Instant.now().plusSeconds(40)
+        val saved = runBlocking { app.useCases.confirmDraft(text.take(40), at) }
+        assertTrue("应已安排系统闹钟", saved.outcome == com.voicetodo.domain.ReminderOutcome.Scheduled)
         android.util.Log.i("DemoTicket2", "SAVED_ITEM=${saved.item.id} AT=$at")
 
         // 4) 等待系统闹钟投递：轮询通知管理器，出现我们频道的高优先级通知即视为到点
@@ -61,6 +62,6 @@ class DemoTicket2EndToEndTest {
         android.util.Log.i("DemoTicket2", "ALARM_NOTIFICATION_FIRED=$fired")
         assertTrue("系统闹钟应真实投递并出现通知", fired)
 
-        app.useCases.deleteItem(saved.item.id)
+        runBlocking { app.useCases.deleteItem(saved.item.id) }
     }
 }

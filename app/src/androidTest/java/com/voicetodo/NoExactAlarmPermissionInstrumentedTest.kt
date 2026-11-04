@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,7 +13,7 @@ import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * AC5 回归（设备真机/模拟器）：**撤销精确闹钟权限**后保存，
@@ -50,16 +51,16 @@ class NoExactAlarmPermissionInstrumentedTest {
         }
         assumeFalse("需要先成功撤销精确闹钟权限", am.canScheduleExactAlarms())
 
-        val before = app.useCases.listItems().size
-        val at = LocalDateTime.now().plusMinutes(5).withNano(0)
+        val before = runBlocking { app.useCases.listItems().size }
+        val at = Instant.now().plusSeconds(300)
 
         // 不应抛异常
-        val result = app.useCases.confirmDraft("无权限回归-${System.currentTimeMillis()}", at)
+        val result = runBlocking { app.useCases.confirmDraft("无权限回归-${System.currentTimeMillis()}", at) }
 
-        assertFalse("未具备精确闹钟权限时不得谎称已安排", result.scheduled)
-        assertTrue("事项仍应保存", app.useCases.listItems().size >= before + 1)
+        assertTrue("未具备精确闹钟权限时不得谎称已安排", result.outcome == com.voicetodo.domain.ReminderOutcome.NotReady)
+        assertTrue("事项仍应保存", runBlocking { app.useCases.listItems().size } >= before + 1)
 
-        app.useCases.deleteItem(result.item.id)
-        assertEquals("清理后应移除", before, app.useCases.listItems().size)
+        runBlocking { app.useCases.deleteItem(result.item.id) }
+        assertEquals("清理后应移除", before, runBlocking { app.useCases.listItems().size })
     }
 }

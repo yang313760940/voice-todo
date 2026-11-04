@@ -113,7 +113,7 @@ fun TodoScreen(vm: TodoViewModel) {
         }
 
         Text(
-            if (state.draftHasTime) "提醒时间：${state.draftTime?.format(timeFmt)}"
+            if (state.draftHasTime) "提醒时间：${state.draftTime?.atZone(java.time.ZoneId.systemDefault())?.format(timeFmt)}"
             else "尚未选择提醒时间",
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -152,7 +152,9 @@ private fun ItemRow(item: TodoItem, onDelete: () -> Unit, tag: String) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.Medium)
-                Text("提醒：${item.remindAt.format(timeFmt)}", style = MaterialTheme.typography.bodySmall)
+                item.remindAt?.let { at ->
+                    Text("提醒：${at.atZone(java.time.ZoneId.systemDefault()).format(timeFmt)}", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("无提醒", style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onDelete) { Text("删除") }
         }

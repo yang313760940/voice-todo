@@ -3,10 +3,11 @@ package com.voicetodo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * 锁屏响铃闭环的宿主侧驱动器（issue #25）：
@@ -34,11 +35,10 @@ class AlarmFireScheduleHelperTest {
         // 宿主手动调用才运行，常规 connectedDebugAndroidTest 不遗留未来闹钟。
         org.junit.Assume.assumeTrue("host-only helper", args.containsKey("fireInSec"))
         val fireInSec = args.getString("fireInSec")!!.toLong()
-        val at = LocalDateTime.now().plusSeconds(fireInSec).withNano(0)
-        val saved = app.useCases.confirmDraft("锁屏响铃复现", at)
-        assertTrue("应已安排系统闹钟", saved.scheduled)
-        val atMillis = java.time.ZonedDateTime.of(at, java.time.ZoneId.systemDefault())
-            .toInstant().toEpochMilli()
+        val at = Instant.now().plusSeconds(fireInSec)
+        val saved = runBlocking { app.useCases.confirmDraft("锁屏响铃复现", at) }
+        assertTrue("应已安排系统闹钟", saved.outcome == com.voicetodo.domain.ReminderOutcome.Scheduled)
+        val atMillis = at.toEpochMilli()
         android.util.Log.i("AlarmFix", "SCHEDULED_ITEM=${saved.item.id} FIRE_AT=$atMillis")
         InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
             putString("scheduledItem", saved.item.id)
@@ -50,7 +50,7 @@ class AlarmFireScheduleHelperTest {
     @Test
     fun cleanup() {
         val itemId = InstrumentationRegistry.getArguments().getString("itemId") ?: return
-        app.useCases.deleteItem(itemId)
+        runBlocking { app.useCases.deleteItem(itemId) }
         android.util.Log.i("AlarmFix", "CLEANED_ITEM=$itemId")
     }
 }

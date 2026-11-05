@@ -36,14 +36,14 @@
 | 勿扰 | `zen_mode=0` |
 | 省电模式 | 关闭（`low_power=0`） |
 | 电量 | 91%→96%，USB 供电 |
-| 待机白名单 | AOSP Doze 白名单**已移除**；`RUN_ANY_IN_BACKGROUND: allow` |
+| 待机白名单 | AOSP Doze 白名单在对照实验中加过，测试结束**已移除**；`RUN_ANY_IN_BACKGROUND` 对照时设为 `allow`，结束已恢复 `default` |
 | MIUI 后台策略 | 测试中由 `miuiAuto` 改为 `noRestrict`（`powerkeeper` `userTable` 已核对） |
 | MIUI 自启动 | 开启（`sliding_button checked=true`） |
 
 设备有 Magisk root，仅用于读取系统状态（`dumpsys`、MIUI `powerkeeper` 数据库副本），
 没有改写系统分区，也没有通过数据库写入修改策略。
 
-> 遗留：`noRestrict` 是用 MIUI 界面设置后留下的改动，未还原为 `miuiAuto`。
+> 遗留：`noRestrict` 是通过 MIUI 界面设置后留下的改动，未还原为 `miuiAuto`。
 > 本机该 ROM 的“省电策略”入口未能通过 adb 稳定定位，故未在本轮静默改回；
 > 如需还原：设置 → 应用设置 → 应用管理 → 语音提醒 → 省电策略 → 智能省电限制。
 

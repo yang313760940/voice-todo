@@ -117,3 +117,39 @@ private fun listItems(
             (!unscheduledOnly || it.isUnscheduled())
     }
     .sortedWith(pendingOrder)
+
+/**
+ * 列表展示分组：同一重复系列中“积压”的实例（发生日期早于今天且未完成）折叠成一组，
+ * 其余事项各自成组。分组只影响展示，不改变任何持久化数据或调度。
+ */
+data class TodoDisplayGroup(
+    val seriesId: String?,
+    val items: List<TodoItem>,
+    /** true 表示这是可折叠的积压组；false 表示普通单项。 */
+    val backlog: Boolean,
+)
+
+fun buildDisplayGroups(items: List<TodoItem>, today: LocalDate): List<TodoDisplayGroup> {
+    val groups = mutableListOf<TodoDisplayGroup>()
+    val backlogIndex = HashMap<String, Int>()
+    for (item in items) {
+        val seriesId = item.seriesId
+        val occurrenceDate = item.occurrenceDate
+        val isBacklog = seriesId != null && occurrenceDate != null &&
+            item.completedAt == null && occurrenceDate.isBefore(today)
+        if (isBacklog) {
+            val sid = requireNotNull(seriesId)
+            val existing = backlogIndex[sid]
+            if (existing != null) {
+                groups[existing] = groups[existing].copy(items = groups[existing].items + item)
+            } else {
+                backlogIndex[sid] = groups.size
+                groups.add(TodoDisplayGroup(sid, listOf(item), backlog = true))
+            }
+        } else {
+            groups.add(TodoDisplayGroup(seriesId, listOf(item), backlog = false))
+        }
+    }
+    return groups
+}
+

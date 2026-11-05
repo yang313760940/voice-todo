@@ -27,6 +27,7 @@ import com.voicetodo.domain.Clock
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
+import com.voicetodo.domain.RecurringEditScope
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
 import com.voicetodo.speech.AudioRecorder
@@ -177,6 +178,8 @@ data class UiState(
     val aiBusy: Boolean = false,
     val aiError: String? = null,
     val seriesLabels: Map<String, String> = emptyMap(),
+    /** 已展开的积压系列 id；仅影响列表折叠展示。 */
+    val expandedBacklogSeries: Set<String> = emptySet(),
 )
 
 /**
@@ -836,6 +839,36 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onCancelDetail() {
         if (!_state.value.busy) _state.value = _state.value.copy(detail = null, message = null)
+    }
+
+    /** 折叠/展开同一重复系列的积压实例；只影响列表展示。 */
+    fun onToggleBacklog(seriesId: String) {
+        if (_state.value.busy) return
+        val current = _state.value.expandedBacklogSeries
+        _state.value = _state.value.copy(
+            expandedBacklogSeries = if (seriesId in current) current - seriesId else current + seriesId,
+        )
+    }
+
+    /** 重复实例：仅修改本次，后续实例维持旧规则。 */
+    fun onSaveDetailThisOnly() = saveSeriesDetail(RecurringEditScope.ThisOnly)
+
+    /** 重复实例：从本次起修改后续实例，历史完成/漏做记录不变。 */
+    fun onSaveDetailThisAndFuture() = saveSeriesDetail(RecurringEditScope.ThisAndFuture)
+
+    private fun saveSeriesDetail(scope: RecurringEditScope) {
+        val detail = _state.value.detail ?: return
+        val original = detail.original ?: return
+        action {
+            val edit = detail.edit(zoneId)
+            useCases.updateRecurringItem(original.id, edit, scope)
+            val message = when (scope) {
+                RecurringEditScope.ThisOnly -> "已仅修改本次实例，后续实例仍按原规则"
+                RecurringEditScope.ThisAndFuture -> "已从本次起修改后续实例，过去的完成与漏做记录保持不变"
+            }
+            _state.value = _state.value.copy(detail = null, message = message)
+            reload()
+        }
     }
 
     fun onSaveDetail() {

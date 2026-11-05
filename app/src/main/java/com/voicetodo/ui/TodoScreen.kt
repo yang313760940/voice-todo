@@ -28,6 +28,7 @@ import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.isOverdue
+import com.voicetodo.domain.buildDisplayGroups
 import com.voicetodo.domain.itemsForView
 import com.voicetodo.domain.supportsUnscheduledFilter
 import java.time.DayOfWeek
@@ -227,19 +228,44 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
             item { Text(emptyText, style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("empty_view")) }
         }
-        itemsIndexed(visible, key = { _, item -> item.id }) { index, item ->
-            val completed = state.selectedView == TodoView.Completed
-            ItemRow(
-                item = item,
-                state = state,
-                zone = vm.zoneId,
-                tag = if (completed) "completed_row_$index" else "item_row_$index",
-                enabled = enabled,
-                onOpen = { vm.onOpenDetail(item.id) },
-                onAction = { if (completed) vm.onRestore(item.id) else vm.onComplete(item.id) },
-                onDelete = { vm.onDelete(item.id) },
-                onRetry = { vm.onRetryReminders(item.id) },
-            )
+        val completedView = state.selectedView == TodoView.Completed
+        val displayGroups = buildDisplayGroups(visible, today)
+        var rowIndex = 0
+        displayGroups.forEach { group ->
+            val backlogSeriesId = group.seriesId
+            if (group.backlog && backlogSeriesId != null) {
+                val expanded = backlogSeriesId in state.expandedBacklogSeries
+                item(key = "backlog_$backlogSeriesId") {
+                    BacklogHeader(
+                        seriesId = backlogSeriesId,
+                        count = group.items.size,
+                        label = state.seriesLabels[backlogSeriesId],
+                        expanded = expanded,
+                        enabled = enabled,
+                        onToggle = { vm.onToggleBacklog(backlogSeriesId) },
+                    )
+                }
+            }
+            val rows = if (group.backlog) {
+                if (backlogSeriesId != null && backlogSeriesId in state.expandedBacklogSeries) group.items
+                else emptyList()
+            } else {
+                group.items
+            }
+            rows.forEach { child ->
+                val index = rowIndex++
+                item(key = child.id) {
+                    ItemRow(
+                        item = child, state = state, zone = vm.zoneId,
+                        tag = if (completedView) "completed_row_$index" else "item_row_$index",
+                        enabled = enabled,
+                        onOpen = { vm.onOpenDetail(child.id) },
+                        onAction = { if (completedView) vm.onRestore(child.id) else vm.onComplete(child.id) },
+                        onDelete = { vm.onDelete(child.id) },
+                        onRetry = { vm.onRetryReminders(child.id) },
+                    )
+                }
+            }
         }
     }
 }
@@ -252,6 +278,31 @@ private fun ViewMenuItem(label: String, tag: String, selected: Boolean, onClick:
         trailingIcon = { if (selected) Text("当前", style = MaterialTheme.typography.labelSmall) },
         modifier = Modifier.testTag(tag),
     )
+}
+
+@Composable
+private fun BacklogHeader(
+    seriesId: String,
+    count: Int,
+    label: String?,
+    expanded: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().testTag("backlog_$seriesId")
+            .clickable(enabled = enabled, onClick = onToggle),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "积压 $count 项 · ${label ?: "重复安排"}",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f).testTag("backlog_label_$seriesId"),
+        )
+        Text(if (expanded) "收起" else "展开",
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.testTag("backlog_toggle_$seriesId"))
+    }
 }
 
 private fun viewTitle(view: TodoView, lists: List<TodoList>): String = when (view) {
@@ -675,21 +726,31 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
             Message(state.message)
         }
         item {
-            if (original == null) {
-                Button(onClick = vm::onSaveDetail, enabled = editable,
-                    modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("创建事项") }
-            } else if (original.completedAt == null) {
-                Button(onClick = vm::onSaveDetail, enabled = editable,
-                    modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("保存修改") }
-                OutlinedButton(onClick = { vm.onComplete(original.id) }, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth().testTag("detail_complete_button")) { Text("完成事项") }
-            } else {
-                Text("已完成事项请先恢复再编辑", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = { vm.onRestore(original.id) }, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth().testTag("detail_restore_button")) { Text("恢复事项") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (original == null) {
+                    Button(onClick = vm::onSaveDetail, enabled = editable,
+                        modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("创建事项") }
+                } else if (original.completedAt == null) {
+                    if (original.seriesId != null) {
+                        Text("保存范围", style = MaterialTheme.typography.titleSmall)
+                        Button(onClick = vm::onSaveDetailThisOnly, enabled = editable,
+                            modifier = Modifier.fillMaxWidth().testTag("detail_save_this_only")) { Text("仅本次保存") }
+                        OutlinedButton(onClick = vm::onSaveDetailThisAndFuture, enabled = editable,
+                            modifier = Modifier.fillMaxWidth().testTag("detail_save_this_and_future")) { Text("本次及以后保存") }
+                    } else {
+                        Button(onClick = vm::onSaveDetail, enabled = editable,
+                            modifier = Modifier.fillMaxWidth().testTag("detail_save_button")) { Text("保存修改") }
+                    }
+                    OutlinedButton(onClick = { vm.onComplete(original.id) }, enabled = enabled,
+                        modifier = Modifier.fillMaxWidth().testTag("detail_complete_button")) { Text("完成事项") }
+                } else {
+                    Text("已完成事项请先恢复再编辑", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { vm.onRestore(original.id) }, enabled = enabled,
+                        modifier = Modifier.fillMaxWidth().testTag("detail_restore_button")) { Text("恢复事项") }
+                }
+                TextButton(onClick = vm::onCancelDetail, enabled = !state.busy,
+                    modifier = Modifier.testTag("detail_cancel_button")) { Text("返回 / 取消修改") }
             }
-            TextButton(onClick = vm::onCancelDetail, enabled = !state.busy,
-                modifier = Modifier.testTag("detail_cancel_button")) { Text("返回 / 取消修改") }
         }
     }
 }

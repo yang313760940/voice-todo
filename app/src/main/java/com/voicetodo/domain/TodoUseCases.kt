@@ -19,6 +19,14 @@ enum class ReminderOutcome {
     NotReady,
 }
 
+/** 编辑重复实例的作用范围。 */
+enum class RecurringEditScope {
+    /** 仅本次：只改选中实例及其提醒，系列规则不变。 */
+    ThisOnly,
+    /** 本次及以后：从选中实例起更新系列规则，过去记录不变。 */
+    ThisAndFuture,
+}
+
 /** 保存/取消结账结果：区分“已保存”与“提醒是否已成功排入系统”。 */
 data class ConfirmResult(
     val item: TodoItem,
@@ -128,6 +136,10 @@ class TodoUseCases(
     }
 
     suspend fun updateItem(id: String, edit: TodoEdit): UpdateResult = mutations.withLock {
+        updateItemLocked(id, edit)
+    }
+
+    private suspend fun updateItemLocked(id: String, edit: TodoEdit): UpdateResult {
         val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
         require(item.recurrence == null) { "重复安排模板不能作为普通事项编辑" }
         require(item.completedAt == null) { "已完成事项请先恢复再编辑" }
@@ -138,7 +150,7 @@ class TodoUseCases(
         val rules = edit.reminders ?: item.reminders.takeIf { it.isNotEmpty() }?.map {
             ReminderEdit(it.id, at = if (it.beforeDue == null) it.at else null, beforeDue = it.beforeDue)
         }
-        if (rules != null) return@withLock updateMultiple(item.copy(listId = nextListId), title, edit, rules)
+        if (rules != null) return updateMultiple(item.copy(listId = nextListId), title, edit, rules)
         val changed = edit.remindAt != item.remindAt
         if (changed) edit.remindAt?.let {
             require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
@@ -149,11 +161,65 @@ class TodoUseCases(
             reminderRevision = item.reminderRevision + if (changed) 1 else 0,
         )
         repo.save(updated)
-        if (!changed) return@withLock UpdateResult(updated, false, null)
+        if (!changed) return UpdateResult(updated, false, null)
         scheduler.cancel(id)
         val outcome = schedule(updated)
-        UpdateResult(updated, true, outcome)
+        return UpdateResult(updated, true, outcome)
     }
+
+    /**
+     * 编辑重复实例，按 [scope] 决定影响范围：
+     * - [RecurringEditScope.ThisOnly]：只改选中实例及其提醒，系列规则、下一实例维持旧规则。
+     * - [RecurringEditScope.ThisAndFuture]：更新系列标题与提醒时刻，撤销并重排选中实例之后的
+     *   未来实例；已经完成的过去实例与过去漏做记录保持不变。
+     * 非重复实例等价于普通 [updateItem]。
+     */
+    suspend fun updateRecurringItem(id: String, edit: TodoEdit, scope: RecurringEditScope): UpdateResult =
+        mutations.withLock {
+            val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+            val seriesId = item.seriesId
+            if (scope == RecurringEditScope.ThisOnly || seriesId == null) {
+                return@withLock updateItemLocked(id, edit)
+            }
+            require(item.completedAt == null) { "已完成事项请先恢复再编辑" }
+            val series = repo.findById(seriesId) ?: throw IllegalArgumentException("重复安排不存在")
+            val rule = series.recurrence ?: throw IllegalArgumentException("该事项不属于重复安排")
+            val selectedDate = item.occurrenceDate
+                ?: throw IllegalArgumentException("重复实例缺少发生日期")
+
+            // 先校验再落库：避免“本次及以后”因非法提醒规则只改了一半。
+            edit.reminders?.let { requested ->
+                require(requested.isNotEmpty()) { "本次及以后修改至少保留一个提醒时刻" }
+                require(requested.all { it.beforeDue == null }) {
+                    "重复安排暂只支持指定时刻，不支持相对提醒"
+                }
+            }
+
+            // 先按“仅本次”的方式应用选中实例的标题、计划、截止、清单与提醒。
+            val applied = updateItemLocked(id, edit)
+            val edited = findItem(id)
+
+            // 由选中实例推导系列提醒时刻；若提醒被清空，则仅改标题、保留原时刻。
+            val times = if (edited.reminders.isEmpty()) rule.reminderTimes
+            else edited.reminders.map { it.at.atZone(zone).toLocalTime() }.distinct()
+            val newRule = rule.copy(reminderTimes = times).apply { validate() }
+            // 标题与清单属于系列级属性，随“本次及以后”同步到重排后的实例。
+            val newSeries = series.copy(title = edited.title, listId = edited.listId, recurrence = newRule)
+            repo.save(newSeries)
+
+            // 只撤销“今天及以后”的未来实例及其闹钟；选中实例与今天之间已经错过的
+            // 过去实例作为漏做记录保留，随后按新规则从今天起重排。
+            val today = clock.now().atZone(zone).toLocalDate()
+            repo.all().filter {
+                it.seriesId == seriesId && it.completedAt == null && it.occurrenceDate != null &&
+                    it.occurrenceDate.isAfter(selectedDate) && !it.occurrenceDate.isBefore(today)
+            }.forEach {
+                scheduler.cancel(it.id)
+                repo.delete(it.id)
+            }
+            ensureSeries(newSeries, repo.all().filter { it.seriesId == seriesId }, clock.now())
+            UpdateResult(findItem(id), applied.reminderChanged, applied.outcome)
+        }
 
     suspend fun createList(name: String): TodoList = mutations.withLock {
         val clean = name.trim()

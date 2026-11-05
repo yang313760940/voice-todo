@@ -135,4 +135,33 @@ class TodoViewsTest {
             item("multi", reminders = listOf(TodoReminder("r", now))).isUnscheduled(),
         )
     }
+
+    @Test fun buildDisplayGroupsCollapsesSameSeriesBacklogAndKeepsOthersSeparate() {
+        fun seriesOccurrence(id: String, day: Int) = TodoItem(
+            id = id,
+            title = "晨读",
+            plannedDate = LocalDate.of(2026, 11, day),
+            remindAt = LocalDate.of(2026, 11, day).atTime(9, 0).atZone(zone).toInstant(),
+            createdAt = now,
+            seriesId = "series-1",
+            occurrenceDate = LocalDate.of(2026, 11, day),
+        )
+        val backlog1 = seriesOccurrence("s1@2026-11-02", 2)
+        val backlog2 = seriesOccurrence("s1@2026-11-03", 3)
+        val todayInstance = seriesOccurrence("s1@2026-11-05", 5)
+        val standalone = item("standalone", plannedDate = today)
+        // 列表已按提醒时刻排序：两天积压 → 当天实例 → 独立事项。
+        val items = listOf(backlog1, backlog2, todayInstance, standalone)
+
+        val groups = buildDisplayGroups(items, today)
+
+        assertEquals(3, groups.size)
+        assertTrue("前两项是同系列积压，折叠成一组", groups[0].backlog)
+        assertEquals("series-1", groups[0].seriesId)
+        assertEquals(listOf(backlog1.id, backlog2.id), groups[0].items.map { it.id })
+        assertFalse("今天及以后不折叠", groups[1].backlog)
+        assertEquals(listOf(todayInstance.id), groups[1].items.map { it.id })
+        assertFalse(groups[2].backlog)
+        assertEquals(listOf(standalone.id), groups[2].items.map { it.id })
+    }
 }

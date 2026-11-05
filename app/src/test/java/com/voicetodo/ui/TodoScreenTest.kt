@@ -30,6 +30,7 @@ import android.app.TimePickerDialog
 import android.content.DialogInterface
 import org.robolectric.shadows.ShadowDialog
 import java.time.LocalDate
+import java.time.LocalTime
 import java.io.File
 import androidx.compose.ui.semantics.SemanticsProperties
 import java.time.Instant
@@ -426,6 +427,88 @@ class TodoScreenTest {
             .assertTextContains("每天 18:00", substring = true)
     }
 
+    @Test fun recurringBacklogFoldsAndEachInstanceCompletesIndividually() {
+        clock.instant = Instant.parse("2026-11-01T00:00:00Z") // 11-01 08:00 上海
+        val series = runBlocking {
+            uc.createRecurring("晨读", RecurrenceRule(RecurrenceFrequency.Daily,
+                LocalDate.of(2026, 11, 1), reminderTimes = listOf(LocalTime.of(9, 0))))
+        }.item
+        clock.instant = Instant.parse("2026-11-04T00:00:00Z") // 11-04 08:00 上海
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.items.count { it.seriesId == series.id } >= 4 }
+        compose.runOnIdle { vm.onSelectView(TodoView.All) }
+        compose.waitForIdle()
+
+        val backlog = vm.state.value.items
+            .filter { it.seriesId == series.id && it.occurrenceDate!!.isBefore(LocalDate.of(2026, 11, 4)) }
+        Assert.assertEquals(2, backlog.size)
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("backlog_${series.id}"))
+        compose.onNodeWithTag("backlog_${series.id}").assertExists()
+        compose.onNodeWithTag("backlog_label_${series.id}", useUnmergedTree = true).assertTextContains("2", substring = true)
+        compose.onNodeWithTag("backlog_${series.id}").performClick()
+        waitFor { series.id in vm.state.value.expandedBacklogSeries }
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("complete_${backlog[0].id}"))
+        compose.onNodeWithTag("complete_${backlog[0].id}").performClick()
+        waitFor { vm.state.value.completedItems.any { it.id == backlog[0].id } && !vm.state.value.busy }
+        val remaining = vm.state.value.items
+            .filter { it.seriesId == series.id && it.occurrenceDate!!.isBefore(LocalDate.of(2026, 11, 4)) }
+        Assert.assertEquals("展开后可逐个完成，积压逐条减少", 1, remaining.size)
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("backlog_${series.id}"))
+        compose.onNodeWithTag("backlog_label_${series.id}", useUnmergedTree = true).assertTextContains("1", substring = true)
+    }
+
+    @Test fun editingRecurringInstanceOffersThisOnlyScopeAndLeavesNextInstanceUnchanged() {
+        val series = runBlocking {
+            uc.createRecurring("夜跑", RecurrenceRule(RecurrenceFrequency.Daily,
+                LocalDate.of(2026, 11, 4), reminderTimes = listOf(LocalTime.of(20, 0))))
+        }.item
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.items.count { it.seriesId == series.id } == 2 }
+        val occ = vm.state.value.items.filter { it.seriesId == series.id }.sortedBy { it.occurrenceDate }
+        val first = occ[0]
+        val second = occ[1]
+
+        open(first)
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_save_this_only"))
+        compose.onNodeWithTag("detail_save_this_only").assertExists()
+        compose.onNodeWithTag("detail_save_this_and_future").assertExists()
+        replaceDetail("detail_title_field", "夜跑(改)")
+        replaceDetail("detail_reminder_value_0", "2026-11-04 21:00")
+        detailClick("detail_save_this_only")
+        waitFor { vm.state.value.detail == null && !vm.state.value.busy }
+
+        val savedFirst = runBlocking { repo.findById(first.id)!! }
+        val savedSecond = runBlocking { repo.findById(second.id)!! }
+        Assert.assertEquals("夜跑(改)", savedFirst.title)
+        Assert.assertEquals(Instant.parse("2026-11-04T13:00:00Z"), savedFirst.reminders.single().at)
+        Assert.assertEquals("下一实例维持旧标题", "夜跑", savedSecond.title)
+        Assert.assertEquals(Instant.parse("2026-11-05T12:00:00Z"), savedSecond.reminders.single().at)
+        Assert.assertEquals(listOf(LocalTime.of(20, 0)), runBlocking { uc.findItem(series.id) }.recurrence!!.reminderTimes)
+    }
+
+    @Test fun editingRecurringInstanceThisAndFutureUpdatesFollowingInstances() {
+        val series = runBlocking {
+            uc.createRecurring("复盘", RecurrenceRule(RecurrenceFrequency.Daily,
+                LocalDate.of(2026, 11, 4), reminderTimes = listOf(LocalTime.of(20, 0))))
+        }.item
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.items.count { it.seriesId == series.id } == 2 }
+        val first = vm.state.value.items.filter { it.seriesId == series.id }
+            .minBy { it.occurrenceDate!! }
+
+        open(first)
+        replaceDetail("detail_title_field", "复盘(改)")
+        replaceDetail("detail_reminder_value_0", "2026-11-04 22:00")
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_save_this_and_future"))
+        compose.onNodeWithTag("detail_save_this_and_future").performClick()
+        waitFor { vm.state.value.detail == null && !vm.state.value.busy }
+
+        Assert.assertEquals(listOf(LocalTime.of(22, 0)), runBlocking { uc.findItem(series.id) }.recurrence!!.reminderTimes)
+        val upcoming = runBlocking { uc.listIncomplete() }.filter { it.seriesId == series.id }
+        Assert.assertTrue("后续实例全部采用新标题", upcoming.all { it.title == "复盘(改)" })
+        Assert.assertTrue("后续实例全部采用新时刻",
+            upcoming.all { it.reminders.single().at.atZone(ZoneId.of("Asia/Shanghai")).toLocalTime() == LocalTime.of(22, 0) })
+    }
     private fun waitFor(condition: () -> Boolean) {
         try {
             compose.waitUntil(10_000) {

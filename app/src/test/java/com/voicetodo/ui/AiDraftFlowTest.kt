@@ -18,27 +18,36 @@ import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.voicetodo.ai.AiAssistException
+import com.voicetodo.ai.AiAssistClient
 import com.voicetodo.ai.AiDraft
+import com.voicetodo.ai.AiPromptContext
+import com.voicetodo.ai.AiRecurrenceDraft
 import com.voicetodo.ai.AiReminderDraft
 import com.voicetodo.ai.AiReminderKind
 import com.voicetodo.ai.AiSettings
 import com.voicetodo.ai.FakeAiAssistClient
+import com.voicetodo.ai.LocalHttpServer
 import com.voicetodo.ai.MemoryAiSettingsStore
+import com.voicetodo.ai.OpenAiCompatibleClient
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.data.FileTodoRepository
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.TodoDatabase
 import com.voicetodo.domain.FrozenClock
 import com.voicetodo.domain.Quadrant
+import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.speech.AudioRecorder
 import com.voicetodo.speech.OfflineTranscriber
 import com.voicetodo.speech.TranscriptResult
 import java.time.Instant
+import java.time.DayOfWeek
 import java.time.ZoneId
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -67,10 +76,12 @@ class AiDraftFlowTest {
     private val scheduler = RecordedScheduler()
     private val settingsStore = MemoryAiSettingsStore()
     private val aiClient = FakeAiAssistClient()
+    private var activeAiClient: AiAssistClient? = null
     private val key = "test" + "-key"
     private val settings = AiSettings("https://api.example.com/v1", "test-model", key)
 
     @Before fun setup() {
+        activeAiClient = null
         val app = ApplicationProvider.getApplicationContext<Application>()
         db = Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()
         repo = RoomTodoRepository(
@@ -100,7 +111,14 @@ class AiDraftFlowTest {
                         override fun release() = Unit
                     },
                     aiSettingsStore = settingsStore,
-                    aiClient = aiClient,
+                    aiClient = object : AiAssistClient by aiClient {
+                        override suspend fun organizeDrafts(
+                            text: String,
+                            context: AiPromptContext,
+                            settings: AiSettings,
+                        ): List<AiDraft> =
+                            (activeAiClient ?: aiClient).organizeDrafts(text, context, settings)
+                    },
                 ) as T
         })[TodoViewModel::class.java]
         compose.setContent { MaterialTheme { TodoScreen(vm) } }
@@ -286,6 +304,165 @@ class AiDraftFlowTest {
 
         assertEquals(0, runBlocking { repo.all().size })
         assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `multi drafts can be selected edited deleted and confirmed atomically`() {
+        configureStore()
+        aiClient.results = listOf(
+            AiDraft(sourceText = "明天买菜，每周一三五六点半锻炼，过几天交报告", title = "买菜",
+                plannedDate = "2026-11-06"),
+            AiDraft(sourceText = "明天买菜，每周一三五六点半锻炼，过几天交报告", title = "锻炼",
+                recurrence = AiRecurrenceDraft(
+                    frequency = RecurrenceFrequency.Weekly,
+                    weekdays = setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY),
+                    time = "18:30",
+                )),
+            AiDraft(sourceText = "明天买菜，每周一三五六点半锻炼，过几天交报告", title = "交报告",
+                clarification = "请补充具体日期"),
+        )
+        typeText("明天买菜，每周一三五六点半锻炼，过几天交报告")
+
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 3 && !vm.state.value.aiBusy }
+        assertEquals(0, runBlocking { repo.all().size })
+        assertTrue(scheduler.scheduled.isEmpty())
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_select_draft_1"))
+        compose.onNodeWithTag("ai_select_draft_1").performClick()
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_title_field"))
+        compose.onNodeWithTag("ai_draft_title_field").performTextReplacement("认真锻炼")
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_delete_draft_2"))
+        compose.onNodeWithTag("ai_delete_draft_2").performClick()
+        assertEquals(2, vm.state.value.aiDrafts.size)
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+        compose.onNodeWithTag("ai_draft_confirm_button").assertIsEnabled().performClick()
+        compose.runOnIdle { vm.onConfirmAiDraft() }
+
+        waitFor { vm.state.value.items.size == 3 && vm.state.value.aiDrafts.isEmpty() && !vm.state.value.busy }
+        assertEquals(listOf("买菜"), vm.state.value.items.filter { it.seriesId == null }
+            .map { it.title })
+        val recurring = vm.state.value.items.filter { it.title == "认真锻炼" }
+        assertEquals(2, recurring.size)
+        assertTrue(recurring.all { it.seriesId != null })
+        assertEquals(2, scheduler.scheduled.size)
+        assertEquals(1, runBlocking { repo.all().count { it.seriesId == null && it.recurrence == null } })
+    }
+
+    @Test
+    fun `http multi drafts support partial deletion and double confirmation without duplicates`() {
+        withHttpDrafts {
+            assertEquals(3, vm.state.value.aiDrafts.size)
+            assertEquals(0, runBlocking { repo.all().size })
+            assertTrue(scheduler.scheduled.isEmpty())
+            compose.onNodeWithTag("ai_source_text").assertIsDisplayed()
+
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_select_draft_1"))
+            compose.onNodeWithTag("ai_select_draft_1").performClick()
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_title_field"))
+            compose.onNodeWithTag("ai_draft_title_field").performTextReplacement("认真锻炼")
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_delete_draft_2"))
+            compose.onNodeWithTag("ai_delete_draft_2").performClick()
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+            compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+            compose.runOnIdle { vm.onConfirmAiDraft() }
+
+            waitFor { vm.state.value.items.size == 3 && vm.state.value.aiDrafts.isEmpty() && !vm.state.value.busy }
+            assertEquals(listOf("买菜"), vm.state.value.items.filter { it.seriesId == null }.map { it.title })
+            assertEquals(2, vm.state.value.items.count { it.title == "认真锻炼" })
+            assertEquals(2, scheduler.scheduled.size)
+        }
+    }
+
+    @Test
+    fun `http batch waits for ambiguous draft and tomorrow only saves a planned date`() {
+        withHttpDrafts {
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+            compose.onNodeWithTag("ai_draft_confirm_button").assertIsNotEnabled()
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_select_draft_2"))
+            compose.onNodeWithTag("ai_select_draft_2").performClick()
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_no_reminder_ack"))
+            compose.onNodeWithTag("ai_no_reminder_ack").performClick()
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+            compose.onNodeWithTag("ai_draft_confirm_button").assertIsEnabled().performClick()
+
+            waitFor { vm.state.value.items.size == 4 && vm.state.value.aiDrafts.isEmpty() && !vm.state.value.busy }
+            val groceries = vm.state.value.items.single { it.title == "买菜" }
+            assertEquals(java.time.LocalDate.of(2026, 11, 5), groceries.plannedDate)
+            assertNull(groceries.dueAt)
+            assertNull(groceries.remindAt)
+            assertTrue(groceries.reminders.isEmpty())
+            assertEquals(2, scheduler.scheduled.size)
+        }
+    }
+
+    @Test
+    fun `http batch cancellation keeps original text and writes nothing`() {
+        withHttpDrafts {
+            val source = vm.state.value.draftText
+            compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_cancel_button"))
+            compose.onNodeWithTag("ai_draft_cancel_button").performClick()
+            waitFor { vm.state.value.aiDraft == null }
+            assertEquals(source, vm.state.value.draftText)
+            assertEquals(0, runBlocking { repo.all().size })
+            assertTrue(scheduler.scheduled.isEmpty())
+        }
+    }
+
+    @Test
+    fun `recurring suggestion can change frequency and month day before saving`() {
+        configureStore()
+        aiClient.results = listOf(
+            AiDraft(sourceText = "每周一三五六点半锻炼", title = "锻炼",
+                recurrence = AiRecurrenceDraft(
+                    frequency = RecurrenceFrequency.Weekly,
+                    weekdays = setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY),
+                    time = "18:30",
+                )),
+        )
+        typeText("每周一三五六点半锻炼")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_recurrence_Monthly"))
+        compose.onNodeWithTag("ai_recurrence_Monthly").performClick()
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_recurrence_month_day"))
+        compose.onNodeWithTag("ai_recurrence_month_day").performTextReplacement("31")
+        assertEquals("18:30", vm.state.value.aiDraft!!.recurrence!!.time)
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+        compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+
+        waitFor { vm.state.value.items.size == 2 && vm.state.value.aiDrafts.isEmpty() && !vm.state.value.busy }
+        val series = runBlocking { repo.all().single { it.recurrence != null } }
+        assertEquals(RecurrenceFrequency.Monthly, series.recurrence!!.frequency)
+        assertEquals(31, series.recurrence!!.dayOfMonth)
+        assertTrue(series.recurrence!!.weekdays.isEmpty())
+        assertEquals(java.time.LocalTime.of(18, 30), series.recurrence!!.reminderTimes.single())
+    }
+
+    private fun withHttpDrafts(block: () -> Unit) {
+        val content = """{"drafts":[
+            {"title":"买菜","plannedDate":"2026-11-05"},
+            {"title":"锻炼","recurrence":{
+                "frequency":"WEEKLY","weekdays":[1,3,5],"time":"18:30"
+            }},
+            {"title":"交报告","clarification":"请补充具体日期"}
+        ]}"""
+        val response = JSONObject().put("choices", JSONArray().put(JSONObject().put(
+            "message",
+            JSONObject().put("content", content),
+        ))).toString()
+        LocalHttpServer(200, response).use { server ->
+            configureStore()
+            settingsStore.settings = AiSettings("http://127.0.0.1:${server.port}/v1", "test-model", key)
+            activeAiClient = OpenAiCompatibleClient()
+            typeText("明天买菜，每周一三五六点半锻炼，过几天交报告")
+            clickAi()
+            waitFor { vm.state.value.aiDrafts.size == 3 && !vm.state.value.aiBusy }
+            block()
+            assertEquals(1, server.requests.size)
+        }
     }
 
     @Test

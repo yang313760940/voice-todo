@@ -59,6 +59,14 @@ class RoomTodoRepository(
     override suspend fun completed() = ready { dao.completed().map { it.item() } }
     override suspend fun findById(id: String) = ready { dao.find(id)?.item() }
     override suspend fun save(item: TodoItem) = ready { dao.save(TodoEntity.from(item)) }
+    override suspend fun insertDrafts(items: List<TodoItem>): List<TodoItem> = ready {
+        db.withTransaction {
+            require(items.map { it.id }.distinct().size == items.size) { "草稿身份不能重复" }
+            val existing = items.associate { it.id to dao.find(it.id)?.item() }
+            dao.importItems(items.filter { existing[it.id] == null }.map(TodoEntity::from))
+            items.map { existing[it.id] ?: it }
+        }
+    }
     override suspend fun lists(): List<TodoList> = ready { dao.lists().map { it.list() } }
     override suspend fun findListById(id: String) = ready { dao.findList(id)?.list() }
     override suspend fun saveList(list: TodoList) = ready { dao.saveList(TodoListEntity.from(list)) }

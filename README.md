@@ -1,7 +1,7 @@
 # 语音提醒（VoiceTodo）
 
 原生 Kotlin + Jetpack Compose 的本地待办应用：点击录音 → 随包 sherpa-onnx 离线普通话转写 →
-可编辑标题 → 手动创建，或由用户自填的 OpenAI 兼容服务整理成一条可编辑草稿 →
+可编辑标题 → 手动创建，或由用户自填的 OpenAI 兼容服务整理成一组可编辑草稿 →
 确认后保存事项 → 真实 AlarmManager 系统闹钟触发通知与响铃 → 关闭。
 
 - minSdk 29（Android 10+），targetSdk 34。
@@ -13,6 +13,9 @@
   不发送录音、历史事项或全部待办。未配置 AI 时，手动创建和离线识别仍可用。
 - AI 服务地址、模型和密钥在“高级设置”中自填；密钥用 Android Keystore 加密保存，
   不进入日志、备份或源码。远程地址必须使用 HTTPS，仅本机调试允许 `http://127.0.0.1`。
+- AI 可一次返回多条草稿；每条可独立编辑、删除或修改象限，确认前不创建事项、不安排闹钟。
+- 多草稿批量确认先校验全部内容，再用一个 Room 事务保存；重复点击或系统调度失败重试不会重复创建。
+- 草稿可带每天、每周多选星期或每月指定日期的重复建议，并可修改重复时刻；保存后使用现有重复实例引擎。
 
 ## 获取随包二进制（首次构建前）
 
@@ -45,7 +48,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 ## 测试
 
 ```bash
-./gradlew :app:testDebugUnitTest          # 当前证据轮次 JVM 120 项（含模拟 HTTP 服务端到端）
+./gradlew :app:testDebugUnitTest          # 当前证据轮次 JVM 237 项（含模拟 HTTP 服务端到端）
 ./gradlew :app:connectedDebugAndroidTest  # 设备仪器测试（需模拟器/真机 + 权限）
 ```
 

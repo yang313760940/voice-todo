@@ -1,0 +1,25 @@
+# Issue #23 重启恢复证据（2026-11-05 Asia/Shanghai）
+
+## 重启前：未来提醒已注册（fireAt=1793841529000 = 09:18:49）
+RTC_WAKEUP #10: Alarm{d7a88ac type 0 origWhen 1793841212000 whenElapsed 877575 com.voicetodo.app}
+type=RTC_WAKEUP origWhen=2026-11-05 09:13:32.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x3
+RTC_WAKEUP #12: Alarm{7734144 type 0 origWhen 1793841529000 whenElapsed 1194576 com.voicetodo.app}
+type=RTC_WAKEUP origWhen=2026-11-05 09:18:49.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x3
+
+## 时间线
+- 09:09:08 reboot; 09:09:39 sys.boot_completed=1; 设备加密锁屏
+- 09:09:50 PIN 解锁
+- 09:10:07 BOOT_COMPLETED 投递到 com.voicetodo.alarm.BootReceiver:
+  11-05 09:10:07.132 ActivityManager: Start proc 10820:com.voicetodo.app/u0a290 for broadcast {com.voicetodo.app/com.voicetodo.alarm.BootReceiver} caller=android
+  11-05 09:10:08.212 SmartPower: com.voicetodo.app/10290 ... broadcast end Intent { act=android.intent.action.BOOT_COMPLETED ... cmp=com.voicetodo.app/com.voicetodo.alarm.BootReceiver }
+
+## 解锁后：未来提醒被重排（dumpsys alarm 重现）
+RTC_WAKEUP #7: Alarm{3aaab96 type 0 origWhen 1793841212000 whenElapsed 247160 com.voicetodo.app}
+   tag=*walarm*:com.voicetodo.action.ALARM_FIRE
+   type=RTC_WAKEUP origWhen=2026-11-05 09:13:32.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x3
+RTC_WAKEUP #11: Alarm{62bc888 type 0 origWhen 1793841529000 whenElapsed 564160 com.voicetodo.app}
+   tag=*walarm*:com.voicetodo.action.ALARM_FIRE
+   type=RTC_WAKEUP origWhen=2026-11-05 09:18:49.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x3
+
+## 清理后：无残留应用闹钟
+无应用待处理闹钟（两条测试项已通过 debug CLEANUP 删除，闹钟撤销）

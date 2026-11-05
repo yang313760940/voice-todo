@@ -29,9 +29,11 @@ class AlarmTestDriverReceiver : BroadcastReceiver() {
         try {
         when (intent.action) {
             "com.voicetodo.debug.SCHEDULE" -> {
-                val at = LocalDateTime.now().plusSeconds(45).withNano(0)
+                val delaySec = intent.getIntExtra("delaySec", 45).toLong()
+                val title = intent.getStringExtra("title") ?: "锁屏响铃验收"
+                val at = LocalDateTime.now().plusSeconds(delaySec).withNano(0)
                 val atInstant = at.atZone(ZoneId.systemDefault()).toInstant()
-                val saved = app.useCases.confirmDraft("锁屏响铃验收", atInstant)
+                val saved = app.useCases.confirmDraft(title, atInstant)
                 pending.resultCode = if (saved.outcome == com.voicetodo.domain.ReminderOutcome.Scheduled) 0 else 1
                 pending.resultData = "scheduledItem=${saved.item.id} fireAt=${atInstant.toEpochMilli()}"
             }

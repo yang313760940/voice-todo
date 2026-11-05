@@ -45,7 +45,9 @@ try {
     if ($power -notmatch 'mWakefulness=(Asleep|Dozing)') { throw 'Device did not sleep' }
 
     # 以设备时钟为准，避免宿主时钟或时区偏差。
-    $now = [long](Invoke-Adb @('shell', 'date', '+%s')) * 1000
+    $nowText = (Invoke-Adb @('shell', 'date', '+%s')).Trim()
+    if ($nowText -notmatch '^\d+$') { throw "Unexpected device time: $nowText" }
+    $now = [long]::Parse($nowText, [Globalization.CultureInfo]::InvariantCulture) * 1000
     $wait = [Math]::Max(1, [Math]::Ceiling(($fireAt - $now) / 1000) + 3)
     if ($wait -gt 60) { throw "Unexpected trigger time: wait=$wait" }
     Start-Sleep -Seconds $wait
@@ -72,7 +74,7 @@ try {
     $ui = Invoke-Adb @('shell', 'cat', '/sdcard/issue25-ui.xml')
     [IO.File]::WriteAllText((Join-Path $EvidenceDir 'ui.xml'), $ui)
     [xml]$tree = $ui
-    $button = $tree.SelectSingleNode('//node[@text="关闭提醒"]')
+    $button = $tree.SelectSingleNode('//node[@text="关闭本次提醒"]')
     if (-not $button -or $button.bounds -notmatch '\[(\d+),(\d+)\]\[(\d+),(\d+)\]') {
         throw 'Dismiss button not found'
     }

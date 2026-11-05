@@ -201,6 +201,12 @@ class RingingService : Service() {
 
     /** 到 60 秒：停止声音，但保留通知（由 AlarmReceiver 的通知继续展示）。 */
     private fun stopSoundOnly() {
+        stopSound()
+        // 停止前台态，通知保留（AlarmReceiver 已单独发通知）
+        stopForeground(STOP_FOREGROUND_DETACH)
+    }
+
+    private fun stopSound() {
         speakingKey = null
         speaker?.stop()
         try {
@@ -210,8 +216,6 @@ class RingingService : Service() {
             player?.release()
             player = null
         }
-        // 停止前台态，通知保留（AlarmReceiver 已单独发通知）
-        stopForeground(STOP_FOREGROUND_DETACH)
     }
 
     override fun onDestroy() {
@@ -250,6 +254,34 @@ class RingingService : Service() {
             if (service.speakingKey != itemId to reminderId) return
             service.speakingKey = null
             service.speaker?.stop()
+        }
+
+        /**
+         * 关闭/完成动作以服务持有的活跃提醒集合为准。
+         *
+         * `NotificationManager.activeNotifications` 的移除是异步的；若在锁屏或厂商系统
+         * 延迟刷新时立即据此判断，会把已关闭的最后一条提醒误认为仍然存在，导致前台服务
+         * 和声音继续运行。返回 false 表示当前进程没有存活的响铃服务，由调用方走无服务兜底。
+         */
+        internal fun stopReminder(
+            itemId: String,
+            reminderId: String,
+        ): Boolean {
+            val service = liveService ?: return false
+            val key = itemId to reminderId
+            service.activeReminderKeys.remove(key)
+            if (service.speakingKey == key) {
+                service.speakingKey = null
+                service.speaker?.stop()
+            }
+            service.getSystemService(NotificationManager::class.java)
+                .cancel(AlarmReceiver.notificationIdFor(itemId, reminderId))
+            if (service.activeReminderKeys.isEmpty()) {
+                service.stopSound()
+                service.stopForeground(STOP_FOREGROUND_REMOVE)
+                service.stopSelf()
+            }
+            return true
         }
     }
 

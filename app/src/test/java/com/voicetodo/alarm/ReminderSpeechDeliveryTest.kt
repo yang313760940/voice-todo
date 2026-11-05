@@ -121,9 +121,9 @@ class ReminderSpeechDeliveryTest {
         try {
             waitFor { fake.spoken.isNotEmpty() }
             AlarmActionReceiver.stopOngoingReminder(app, item.id, item.id)
-            assertEquals(
-                RingingService::class.java.name,
-                shadowOf(app).nextStoppedService.component!!.className,
+            assertTrue(
+                "关闭最后一个提醒必须由响铃服务自身停止，不能依赖异步的通知列表",
+                shadowOf(controller.get()).isStoppedBySelf,
             )
         } finally {
             controller.destroy()

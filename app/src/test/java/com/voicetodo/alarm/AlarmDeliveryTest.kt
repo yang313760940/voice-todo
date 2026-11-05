@@ -58,8 +58,10 @@ class AlarmDeliveryTest {
             assertEquals(notification, shadowOf(controller.get()).lastForegroundNotification)
             notification.actions.last().actionIntent.send()
             shadowOf(android.os.Looper.getMainLooper()).idle()
-            val stoppedService = shadowOf(app).nextStoppedService
-            assertEquals(RingingService::class.java.name, stoppedService.component!!.className)
+            assertTrue(
+                "最后一个提醒关闭后，服务必须自行停止而不是依赖异步通知列表",
+                shadowOf(controller.get()).isStoppedBySelf,
+            )
             val manager = app.getSystemService(android.app.NotificationManager::class.java)
             assertEquals(0, manager.activeNotifications.size)
         } finally {

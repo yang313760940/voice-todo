@@ -50,6 +50,7 @@
         <!-- 闹钟触发接收器：弹出提醒界面并启动响铃 -->
         <receiver
             android:name=".alarm.AlarmReceiver"
+            android:directBootAware="true"
             android:exported="false" />
 
         <!-- 响应“关闭本次提醒”动作 -->
@@ -66,8 +67,9 @@
         <receiver
             android:name=".alarm.BootReceiver"
             android:exported="true"
-            android:directBootAware="false">
+            android:directBootAware="true">
             <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.USER_UNLOCKED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.AlarmReceiver
+import com.voicetodo.alarm.DeviceProtectedReminderStore
 import com.voicetodo.alarm.SystemReminderScheduler
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -19,20 +20,24 @@ class ReminderRecoveryTestDriverReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val app = context.applicationContext as VoiceTodoApp
                 when (intent.action) {
                     ACTION_SCHEDULE -> {
-                        val at = Instant.now().plusSeconds(30 * 60)
+                        val app = context.applicationContext as VoiceTodoApp
+                        app.ensureCredentialDependencies()
+                        val delaySeconds = intent.getLongExtra(EXTRA_DELAY_SECONDS, 30 * 60L)
+                        val at = Instant.now().plusSeconds(delaySeconds)
                         val result = app.useCases.confirmDraft("恢复验收", at)
                         pendingResult.resultData = "itemId=${result.item.id} fireAt=${at.toEpochMilli()}"
                     }
                     ACTION_DROP_SYSTEM -> {
+                        val app = context.applicationContext as VoiceTodoApp
                         val itemId = requireNotNull(intent.getStringExtra(EXTRA_ITEM_ID))
                         app.scheduler.cancel(itemId)
                         pendingResult.resultData = "dropped=$itemId"
                     }
                     ACTION_RECONCILE -> {
-                        app.reminderRecovery.reconcile()
+                        val app = context.applicationContext as VoiceTodoApp
+                        app.reconcileAfterUnlock()
                         pendingResult.resultData = "reconciled=true"
                     }
                     ACTION_STATUS -> {
@@ -40,9 +45,18 @@ class ReminderRecoveryTestDriverReceiver : BroadcastReceiver() {
                         pendingResult.resultData = "pending=${pendingIntent(context, itemId) != null}"
                     }
                     ACTION_CLEANUP -> {
+                        val app = context.applicationContext as VoiceTodoApp
                         val itemId = requireNotNull(intent.getStringExtra(EXTRA_ITEM_ID))
                         app.useCases.deleteItem(itemId)
                         pendingResult.resultData = "deleted=$itemId"
+                    }
+                    ACTION_DIRECT_BOOT_STATUS -> {
+                        val records = DeviceProtectedReminderStore(context).records()
+                        pendingResult.resultData = records.joinToString(",") {
+                            "itemId=${it.itemId};reminderId=${it.reminderId};at=${it.atMillis};" +
+                                "revision=${it.revision};delivered=${it.deliveredAtMillis != null};" +
+                                "pending=${pendingIntent(context, it.itemId) != null}"
+                        }.ifEmpty { "records=0" }
                     }
                 }
                 pendingResult.resultCode = 0
@@ -74,6 +88,8 @@ class ReminderRecoveryTestDriverReceiver : BroadcastReceiver() {
         const val ACTION_RECONCILE = "com.voicetodo.debug.RECOVERY_RECONCILE"
         const val ACTION_STATUS = "com.voicetodo.debug.RECOVERY_STATUS"
         const val ACTION_CLEANUP = "com.voicetodo.debug.RECOVERY_CLEANUP"
+        const val ACTION_DIRECT_BOOT_STATUS = "com.voicetodo.debug.DIRECT_BOOT_STATUS"
         const val EXTRA_ITEM_ID = "itemId"
+        const val EXTRA_DELAY_SECONDS = "delaySeconds"
     }
 }

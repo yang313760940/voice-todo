@@ -131,6 +131,12 @@ class RingingService : Service() {
                         }
                     }
                 }
+                if (delivered) {
+                    (application as VoiceTodoApp).directBootStore.removeReminder(
+                        token.itemId,
+                        token.reminderId,
+                    )
+                }
                 if ((!delivered || !publishedByService) && activeReminderKeys.isEmpty()) {
                     stopSelfResult(startId)
                 }

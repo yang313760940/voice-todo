@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.os.UserManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,6 +12,8 @@ import kotlinx.coroutines.launch
 import com.voicetodo.alarm.SystemReminderScheduler
 import com.voicetodo.alarm.SystemFocusScheduler
 import com.voicetodo.alarm.ReminderRecoveryCoordinator
+import com.voicetodo.alarm.DeviceProtectedReminderStore
+import com.voicetodo.alarm.DirectBootReminderCoordinator
 import com.voicetodo.data.FileTodoRepository
 import com.voicetodo.data.JsonBackupCodec
 import com.voicetodo.data.PrivateBackupFileStore
@@ -58,11 +61,30 @@ class VoiceTodoApp : Application() {
     lateinit var backupManager: BackupManager
         private set
 
+    internal lateinit var directBootStore: DeviceProtectedReminderStore
+        private set
+
+    private lateinit var directBootRecovery: DirectBootReminderCoordinator
+    private var credentialDependenciesReady = false
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels(this)
+        directBootStore = DeviceProtectedReminderStore(this)
+        scheduler = SystemReminderScheduler(this)
+        if (!getSystemService(UserManager::class.java).isUserUnlocked) return
+        ensureCredentialDependencies()
+
+        appScope.launch {
+            reconcileAfterUnlock()
+        }
+    }
+
+    @Synchronized
+    internal fun ensureCredentialDependencies() {
+        if (credentialDependenciesReady) return
         val db = Room.databaseBuilder(this, TodoDatabase::class.java, "todos.db")
             .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
             .build()
@@ -71,11 +93,17 @@ class VoiceTodoApp : Application() {
             FileTodoRepository(filesDir, ZoneId.systemDefault()),
         )
         focusRepository = RoomFocusRepository(db)
-        scheduler = SystemReminderScheduler(this)
         focusScheduler = SystemFocusScheduler(this)
         useCases = TodoUseCases(repository, scheduler, SystemClock())
         focusUseCases = FocusUseCases(focusRepository, focusScheduler, SystemClock(), repository, ZoneId.systemDefault())
         reminderRecovery = ReminderRecoveryCoordinator(this, useCases)
+        directBootRecovery = DirectBootReminderCoordinator(
+            this,
+            directBootStore,
+            scheduler,
+            useCases,
+            reminderRecovery,
+        )
         backupManager = DataBackupUseCases(
             store = RoomBackupStore(db, repository),
             codec = JsonBackupCodec,
@@ -87,24 +115,33 @@ class VoiceTodoApp : Application() {
             clock = SystemClock(),
             zone = { ZoneId.systemDefault() },
             appVersion = appVersion(),
-            reconcile = { reminderRecovery.reconcile() },
+            reconcile = { directBootRecovery.reconcileAfterUnlock() },
             exclusive = { block -> useCases.withMutationLock { block() } },
         )
+        credentialDependenciesReady = true
+    }
 
-        // 冷启动/重开时对账：把仓库中仍有效的未来提醒重新排入系统（幂等）。
-        appScope.launch {
-            try {
-                reminderRecovery.reconcile()
-                focusUseCases.reconcileEnd()
-            } catch (e: Exception) {
-                android.util.Log.e("VoiceTodoApp", "Migration/reconcile failed; legacy data retained", e)
-            }
+    internal fun restoreBeforeUnlock() {
+        directBootRecoveryOrNull()?.restoreBeforeUnlock()
+            ?: DirectBootReminderCoordinator.restoreBeforeUnlock(directBootStore, scheduler)
+    }
+
+    internal suspend fun reconcileAfterUnlock() {
+        ensureCredentialDependencies()
+        try {
+            directBootRecovery.reconcileAfterUnlock()
+            focusUseCases.reconcileEnd()
+        } catch (e: Exception) {
+            android.util.Log.e("VoiceTodoApp", "Migration/reconcile failed; legacy data retained", e)
         }
     }
 
+    private fun directBootRecoveryOrNull(): DirectBootReminderCoordinator? =
+        if (::directBootRecovery.isInitialized) directBootRecovery else null
+
     fun requestReminderReconcile() {
         appScope.launch {
-            runCatching { reminderRecovery.reconcile() }
+            runCatching { reconcileAfterUnlock() }
                 .onFailure { android.util.Log.e("VoiceTodoApp", "Reminder reconcile failed", it) }
         }
     }

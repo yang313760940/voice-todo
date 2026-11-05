@@ -14,6 +14,8 @@ internal object AlarmNotification {
         context: Context, itemId: String, title: String,
         reminderId: String = itemId, revision: Long = Long.MIN_VALUE,
         speechNotice: String? = null,
+        silent: Boolean = false,
+        allowFullScreen: Boolean = true,
     ): Notification {
         val base = SystemReminderScheduler.requestCodeFor(itemId, reminderId)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -70,9 +72,22 @@ internal object AlarmNotification {
             .addAction(0, "完成", completePi)
             .addAction(0, "延后", snoozePi)
             .addAction(0, "关闭", dismissPi)
-        if (readReminderCapabilities(context).canUseFullScreenIntent) {
+        if (silent) builder.setSilent(true)
+        if (allowFullScreen && readReminderCapabilities(context).canUseFullScreenIntent) {
             builder.setFullScreenIntent(ringPi, true)
         }
         return builder.build()
     }
+
+    fun buildBeforeUnlock(context: Context): Notification =
+        NotificationCompat.Builder(context, VoiceTodoApp.CHANNEL_REMINDER)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("语音提醒")
+            .setContentText("解锁后查看事项")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(false)
+            .build()
 }

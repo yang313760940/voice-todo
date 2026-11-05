@@ -9,12 +9,12 @@ import kotlinx.coroutines.launch
 import com.voicetodo.VoiceTodoApp
 
 /**
- * 解锁后开机/应用升级/权限恢复/时间变化后重建未来提醒。
- * 不使用 directBootAware：解锁后投递即可（首版切片；Direct Boot 见规格后续要求）。
+ * 首次解锁前仅从设备加密区恢复最小提醒；解锁后再读取主数据并完整对账。
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
+            Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_USER_UNLOCKED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
@@ -24,7 +24,13 @@ class BootReceiver : BroadcastReceiver() {
                 val result = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        (context.applicationContext as VoiceTodoApp).reminderRecovery.reconcile()
+                        val app = context.applicationContext as VoiceTodoApp
+                        val unlocked = context.getSystemService(android.os.UserManager::class.java).isUserUnlocked
+                        if (intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED || !unlocked) {
+                            app.restoreBeforeUnlock()
+                        } else {
+                            app.reconcileAfterUnlock()
+                        }
                     } catch (e: Exception) {
                         android.util.Log.e("BootReceiver", "Migration/reconcile failed", e)
                     } finally {

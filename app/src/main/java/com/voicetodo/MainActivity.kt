@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        (application as VoiceTodoApp).ensureCredentialDependencies()
         requestRuntimePermissions()
         setContent {
             val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()

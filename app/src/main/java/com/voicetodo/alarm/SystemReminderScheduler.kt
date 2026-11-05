@@ -23,7 +23,9 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
 
     private val alarmManager: AlarmManager =
         context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    private val registrations = context.getSharedPreferences("reminder_schedule_ids", Context.MODE_PRIVATE)
+    private val directBootStore = DeviceProtectedReminderStore(context)
+    private val registrations = context.createDeviceProtectedStorageContext()
+        .getSharedPreferences("reminder_schedule_ids", Context.MODE_PRIVATE)
 
     fun capabilities(): ReminderCapabilities = readReminderCapabilities(context)
 
@@ -52,29 +54,53 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
 
     @SuppressLint("MissingPermission")
     override fun scheduleReminder(itemId: String, title: String, reminderId: String, at: Instant,
-        revision: Long): Boolean = synchronized(registrationLock) {
+        revision: Long): Boolean = scheduleToken(
+        ReminderToken(itemId, revision, at.toEpochMilli(), reminderId),
+        title,
+    )
+
+    internal fun restoreBeforeUnlock(reminder: DeviceProtectedReminder): Boolean =
+        scheduleToken(reminder.token, GENERIC_TITLE)
+
+    @SuppressLint("MissingPermission")
+    private fun scheduleToken(token: ReminderToken, title: String): Boolean = synchronized(registrationLock) {
         // 精确闹钟权限/能力预检：不具备时不打系统调用，如实返回 false。
         if (!capabilities().canScheduleExactAlarm) return@synchronized false
 
         // Persist cancellation identities before the system call, including across process exit.
-        val ids = registrations.getStringSet(itemId, emptySet()).orEmpty().toMutableSet().apply { add(reminderId) }
-        if (!registrations.edit().putStringSet(itemId, ids).commit()) return@synchronized false
+        val ids = registrations.getStringSet(token.itemId, emptySet()).orEmpty().toMutableSet()
+            .apply { add(token.reminderId) }
+        if (!registrations.edit().putStringSet(token.itemId, ids).commit()) return@synchronized false
 
-        val atMillis = at.toEpochMilli()
-        val pi = alarmPendingIntent(itemId, title, atMillis, revision, reminderId)
+        val pi = alarmPendingIntent(
+            token.itemId,
+            title,
+            token.atMillis,
+            token.revision,
+            token.reminderId,
+        )
         // setAlarmClock 需要一个用户可见的 showIntent（点系统闹钟图标进入应用）
         val showIntent = Intent(context, com.voicetodo.MainActivity::class.java).apply {
-            data = alarmUri(itemId, reminderId).buildUpon().authority("show-alarm").build()
+            data = alarmUri(token.itemId, token.reminderId).buildUpon().authority("show-alarm").build()
         }
         val showPi = PendingIntent.getActivity(
             context,
-            requestCodeFor(itemId, reminderId) + SHOW_REQUEST_OFFSET,
+            requestCodeFor(token.itemId, token.reminderId) + SHOW_REQUEST_OFFSET,
             showIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         try {
-            alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(atMillis, showPi), pi)
-            true
+            alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(token.atMillis, showPi), pi)
+            if (directBootStore.upsert(token)) {
+                true
+            } else {
+                alarmManager.cancel(pi)
+                pi.cancel()
+                val remaining = ids.toMutableSet().apply { remove(token.reminderId) }
+                if (remaining.isEmpty()) registrations.edit().remove(token.itemId).commit()
+                else registrations.edit().putStringSet(token.itemId, remaining).commit()
+                false
+            }
         } catch (e: SecurityException) {
             // 权限在预检后瞬间被撤回等竞态：不假报成功
             false
@@ -85,6 +111,7 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         val ids = registrations.getStringSet(itemId, emptySet()).orEmpty() + itemId
         ids.forEach { cancelOperation(itemId, it) }
         registrations.edit().remove(itemId).commit()
+        directBootStore.removeItem(itemId)
         Unit
     }
 
@@ -93,6 +120,7 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         val ids = registrations.getStringSet(itemId, emptySet()).orEmpty().toMutableSet().apply { remove(reminderId) }
         if (ids.isEmpty()) registrations.edit().remove(itemId).commit()
         else registrations.edit().putStringSet(itemId, ids).commit()
+        directBootStore.removeReminder(itemId, reminderId)
         Unit
     }
 
@@ -133,6 +161,7 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         const val EXTRA_REMINDER_ID = "extra_reminder_id"
         /** 朗读不可用时的回退原因，供全屏提醒页展示。 */
         const val EXTRA_SPEECH_NOTICE = "extra_speech_notice"
+        private const val GENERIC_TITLE = "语音提醒"
         private val registrationLock = Any()
 
         private fun alarmUri(itemId: String, reminderId: String): Uri =

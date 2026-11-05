@@ -8,6 +8,7 @@
             android:permission="android.permission.DUMP" />
         <receiver
             android:name="com.voicetodo.debug.ReminderRecoveryTestDriverReceiver"
+            android:directBootAware="true"
             android:exported="true"
             android:permission="android.permission.DUMP" />
     </application>

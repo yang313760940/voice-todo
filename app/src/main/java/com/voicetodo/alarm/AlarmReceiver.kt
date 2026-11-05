@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.UserManager
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.findReminder
@@ -38,8 +39,14 @@ class AlarmReceiver : BroadcastReceiver() {
     suspend fun deliver(context: Context, intent: Intent) {
         if (intent.action != SystemReminderScheduler.ACTION_FIRE) return
         val token = ReminderToken.from(intent) ?: return
+        if (!context.getSystemService(UserManager::class.java).isUserUnlocked) {
+            deliverBeforeUnlock(context, token)
+            return
+        }
         val itemId = token.itemId
-        val repo = (context.applicationContext as VoiceTodoApp).repository
+        val app = context.applicationContext as VoiceTodoApp
+        app.ensureCredentialDependencies()
+        val repo = app.repository
         val item = repo.findById(itemId)
         if (item == null || !item.isCurrentReminder(itemId, token.reminderId, token.revision, token.atMillis) ||
             repo.deliveredAt(itemId, token.reminderId, token.revision) != null) {
@@ -57,9 +64,12 @@ class AlarmReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             // 后台启动 FGS 受限：记录而非静默吞掉，便于诊断。
             android.util.Log.w(TAG, "startForegroundService 失败（后台受限/无权限）", e)
-            repo.deliverReminder(itemId, token.reminderId, token.revision, token.atMillis, Instant::now) {
+            val delivered = repo.deliverReminder(
+                itemId, token.reminderId, token.revision, token.atMillis, Instant::now,
+            ) {
                 showFallbackNotification(context, it, token.reminderId)
             }
+            if (delivered) app.directBootStore.removeReminder(itemId, token.reminderId)
         }
         // 闹钟已到点：补排下一条实例，避免用户长期不打开应用后重复安排停摆。
         runCatching {
@@ -91,6 +101,20 @@ class AlarmReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "提醒通知不可用", e)
             false
+        }
+
+        internal fun deliverBeforeUnlock(context: Context, token: ReminderToken): Boolean {
+            VoiceTodoApp.createNotificationChannels(context)
+            val store = DeviceProtectedReminderStore(context)
+            return store.deliverIfCurrent(token, Instant.now()) {
+                runCatching {
+                    context.getSystemService(NotificationManager::class.java).notify(
+                        notificationIdFor(token.itemId, token.reminderId),
+                        AlarmNotification.buildBeforeUnlock(context),
+                    )
+                    true
+                }.getOrDefault(false)
+            }
         }
     }
 }

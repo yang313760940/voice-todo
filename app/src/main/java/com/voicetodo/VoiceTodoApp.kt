@@ -10,6 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.voicetodo.alarm.SystemReminderScheduler
 import com.voicetodo.alarm.SystemFocusScheduler
+import com.voicetodo.alarm.ReminderRecoveryCoordinator
 import com.voicetodo.data.FileTodoRepository
 import androidx.room.Room
 import com.voicetodo.data.RoomTodoRepository
@@ -44,6 +45,9 @@ class VoiceTodoApp : Application() {
     lateinit var focusUseCases: FocusUseCases
         private set
 
+    lateinit var reminderRecovery: ReminderRecoveryCoordinator
+        private set
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -62,15 +66,23 @@ class VoiceTodoApp : Application() {
         focusScheduler = SystemFocusScheduler(this)
         useCases = TodoUseCases(repository, scheduler, SystemClock())
         focusUseCases = FocusUseCases(focusRepository, focusScheduler, SystemClock(), repository, ZoneId.systemDefault())
+        reminderRecovery = ReminderRecoveryCoordinator(this, useCases)
 
         // 冷启动/重开时对账：把仓库中仍有效的未来提醒重新排入系统（幂等）。
         appScope.launch {
             try {
-                useCases.reconcileReminders()
+                reminderRecovery.reconcile()
                 focusUseCases.reconcileEnd()
             } catch (e: Exception) {
                 android.util.Log.e("VoiceTodoApp", "Migration/reconcile failed; legacy data retained", e)
             }
+        }
+    }
+
+    fun requestReminderReconcile() {
+        appScope.launch {
+            runCatching { reminderRecovery.reconcile() }
+                .onFailure { android.util.Log.e("VoiceTodoApp", "Reminder reconcile failed", it) }
         }
     }
 

@@ -28,6 +28,7 @@ import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.RecurringEditScope
+import com.voicetodo.domain.MissedReminder
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
 import com.voicetodo.speech.AudioRecorder
@@ -178,6 +179,7 @@ data class UiState(
     val aiBusy: Boolean = false,
     val aiError: String? = null,
     val seriesLabels: Map<String, String> = emptyMap(),
+    val missedReminders: List<MissedReminder> = emptyList(),
     /** 已展开的积压系列 id；仅影响列表折叠展示。 */
     val expandedBacklogSeries: Set<String> = emptySet(),
 )
@@ -193,11 +195,16 @@ class TodoViewModel @JvmOverloads constructor(
     private val capabilities: () -> ReminderCapabilities = { (app as VoiceTodoApp).scheduler.capabilities() },
     private val transcriber: OfflineTranscriber = SherpaOfflineTranscriber(app),
     private val clock: Clock = SystemClock(),
-    val zoneId: ZoneId = ZoneId.systemDefault(),
+    zoneId: ZoneId? = null,
     private val recorder: AudioRecorder = PcmRecorder(),
     private val aiSettingsStore: AiSettingsStore = EncryptedAiSettingsStore(app),
     private val aiClient: AiAssistClient = OpenAiCompatibleClient(),
+    private val reconcileReminders: suspend () -> Unit = {
+        if (app is VoiceTodoApp) app.reminderRecovery.reconcile()
+    },
 ) : AndroidViewModel(app) {
+    private val configuredZoneId = zoneId
+    val zoneId: ZoneId get() = configuredZoneId ?: ZoneId.systemDefault()
     private val operations = Mutex()
     private var transcriptionJob: Job? = null
     private var speechGeneration = 0L
@@ -237,9 +244,14 @@ class TodoViewModel @JvmOverloads constructor(
         }
     }
 
-    private fun refresh() {
+    private fun refresh(reconcile: Boolean = false) {
         viewModelScope.launch {
-            try { operations.withLock { reload() } } catch (e: Exception) {
+            try {
+                operations.withLock {
+                    if (reconcile) reconcileReminders()
+                    reload()
+                }
+            } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 _state.value = _state.value.copy(message = e.message)
             }
@@ -250,6 +262,7 @@ class TodoViewModel @JvmOverloads constructor(
         val pending = useCases.listIncomplete()
         val completed = useCases.listCompleted()
         val lists = useCases.listTodoLists()
+        val missed = useCases.listMissedReminders()
         val labels = useCases.listRecurrenceSeries().associate {
             it.id to recurrenceLabel(it.recurrence!!)
         }
@@ -259,7 +272,8 @@ class TodoViewModel @JvmOverloads constructor(
             lists.none { it.id == selected.listId }) TodoView.Inbox else selected
         _state.value = _state.value.copy(items = pending, completedItems = completed,
             todoLists = lists, selectedView = safeView,
-            deliveredIds = delivered, now = clock.now(), loading = false, seriesLabels = labels)
+            deliveredIds = delivered, now = clock.now(), loading = false, seriesLabels = labels,
+            missedReminders = missed)
     }
 
     private fun action(block: suspend () -> Unit) {
@@ -279,7 +293,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onRefresh() {
         refreshCapabilities()
-        if (!_state.value.busy) refresh()
+        if (!_state.value.busy) refresh(reconcile = true)
     }
 
     fun onSelectView(view: TodoView) {

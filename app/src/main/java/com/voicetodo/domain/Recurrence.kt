@@ -8,6 +8,18 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.ZoneId
 
+/** 当地提醒时间的唯一换算规则：跳时后移，重复时刻取较早偏移。 */
+fun localReminderInstant(date: LocalDate, time: LocalTime, zone: ZoneId): Instant {
+    val local = LocalDateTime.of(date, time)
+    val rules = zone.rules
+    val offsets = rules.getValidOffsets(local)
+    return if (offsets.isEmpty()) {
+        rules.getTransition(local)?.instant ?: local.atZone(zone).toInstant()
+    } else {
+        local.toInstant(offsets.maxByOrNull { it.totalSeconds }!!)
+    }
+}
+
 enum class RecurrenceFrequency {
     Daily,
     Weekly,
@@ -75,14 +87,6 @@ data class RecurrenceRule(
      * 夏令时跳时：使用跳时后的首个有效时刻；重复时刻：只取较早偏移，保证一个当地时刻只有一个实例。
      */
     fun instantOn(date: LocalDate, time: LocalTime, zone: ZoneId): Instant {
-        val local = LocalDateTime.of(date, time)
-        val rules = zone.rules
-        val offsets = rules.getValidOffsets(local)
-        return if (offsets.isEmpty()) {
-            rules.getTransition(local)?.instant ?: local.atZone(zone).toInstant()
-        } else {
-            // ZoneOffset 的自然顺序按偏移量倒序；显式取 totalSeconds 最大者，即较早出现的那个时刻。
-            local.toInstant(offsets.maxByOrNull { it.totalSeconds }!!)
-        }
+        return localReminderInstant(date, time, zone)
     }
 }

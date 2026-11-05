@@ -127,6 +127,8 @@ class SettingsScreenTest {
         compose.onNodeWithText("事项保存").assertIsDisplayed()
         compose.onNodeWithText("系统调度").assertIsDisplayed()
         compose.onNodeWithText("通知可见条件").assertIsDisplayed()
+        compose.onNodeWithTag("reminder_recovery_triggers").assertIsDisplayed()
+        compose.onNodeWithTag("force_stop_boundary").assertIsDisplayed()
         compose.onNodeWithText("提醒通知频道").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("全屏提醒入口").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("到点仍保留系统允许的通知与响铃", substring = true)

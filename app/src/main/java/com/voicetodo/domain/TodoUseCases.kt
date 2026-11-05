@@ -39,6 +39,13 @@ data class RestoreResult(
     val pastReminderCleared: Boolean,
 )
 
+/** 已到时但未投递、事项仍未完成的提醒；保留原提醒时间供用户判断与重新安排。 */
+data class MissedReminder(
+    val item: TodoItem,
+    val reminderId: String,
+    val originalAt: Instant,
+)
+
 data class TodoEdit(
     val title: String,
     val plannedDate: LocalDate?,
@@ -98,7 +105,7 @@ class TodoUseCases(
     private val repo: TodoRepository,
     private val scheduler: ReminderScheduler,
     private val clock: Clock,
-    private val zone: ZoneId = ZoneId.systemDefault(),
+    private var zone: ZoneId = ZoneId.systemDefault(),
 ) {
     private val mutations = Mutex()
     suspend fun listItems(): List<TodoItem> = repo.all()
@@ -117,8 +124,20 @@ class TodoUseCases(
         repo.deliveredAt(item.id, item.reminderRevision) != null
     } else item.reminders.any { repo.deliveredAt(item.id, it.id, it.revision) != null }
 
-    suspend fun reconcileReminders() = mutations.withLock {
+    suspend fun listMissedReminders(): List<MissedReminder> = mutations.withLock {
+        missedRemindersLocked(clock.now())
+    }
+
+    suspend fun reconcileReminders(
+        previousZone: ZoneId? = null,
+        currentZone: ZoneId = zone,
+    ) = mutations.withLock {
         val now = clock.now()
+        val sourceZone = previousZone ?: zone.takeIf { it != currentZone }
+        if (sourceZone != null && sourceZone != currentZone) {
+            rebaseRecurringReminders(sourceZone, currentZone, now)
+        }
+        zone = currentZone
         ensureAllSeries(now)
         for (item in repo.incomplete().filter { it.recurrence == null }) {
             if (item.reminders.isNotEmpty()) {
@@ -132,6 +151,67 @@ class TodoUseCases(
             }
             val at = item.remindAt
             if (at != null && at.isAfter(now) && !wasDelivered(item)) schedule(item)
+        }
+    }
+
+    private suspend fun missedRemindersLocked(now: Instant): List<MissedReminder> =
+        repo.incomplete().filter { it.recurrence == null }.flatMap { item ->
+            val reminders = item.reminders.ifEmpty {
+                item.remindAt?.let {
+                    listOf(TodoReminder(item.id, it, revision = item.reminderRevision))
+                }.orEmpty()
+            }
+            reminders.mapNotNull { reminder ->
+                val delivered = reminder.deliveredAt != null ||
+                    repo.deliveredAt(item.id, reminder.id, reminder.revision) != null
+                if (reminder.at.isAfter(now) || delivered ||
+                    reminder.outcome == ReminderOutcome.NotRequested) null
+                else MissedReminder(item, reminder.id, reminder.at)
+            }
+        }.sortedWith(compareBy<MissedReminder> { it.originalAt }
+            .thenBy { it.item.id }.thenBy { it.reminderId })
+
+    /**
+     * 时区变化时，重复实例保留原当地日期和钟点并换算成新时区的实际时刻；
+     * 一次性提醒不参与换算，继续保持用户最初选择的 [Instant]。
+     */
+    private suspend fun rebaseRecurringReminders(
+        previousZone: ZoneId,
+        currentZone: ZoneId,
+        now: Instant,
+    ) {
+        val all = repo.all()
+        for (item in all.filter { it.seriesId != null && it.completedAt == null }) {
+            val date = item.occurrenceDate ?: continue
+            if (item.reminders.isEmpty()) continue
+            val nextRevision = maxOf(
+                item.reminderRevision,
+                item.reminders.maxOfOrNull { it.revision } ?: item.reminderRevision,
+            ) + 1
+            val changedIds = mutableListOf<String>()
+            val reminders = item.reminders.map { reminder ->
+                val delivered = reminder.deliveredAt != null ||
+                    repo.deliveredAt(item.id, reminder.id, reminder.revision) != null
+                if (delivered || reminder.outcome == ReminderOutcome.NotRequested) return@map reminder
+                val localTime = reminder.at.atZone(previousZone).toLocalTime()
+                val rebasedAt = localReminderInstant(date, localTime, currentZone)
+                if (rebasedAt == reminder.at) reminder else {
+                    changedIds += reminder.id
+                    reminder.copy(
+                        at = rebasedAt,
+                        revision = nextRevision,
+                        outcome = if (rebasedAt.isAfter(now)) ReminderOutcome.NotReady else reminder.outcome,
+                        deliveredAt = null,
+                    )
+                }
+            }
+            if (changedIds.isEmpty()) continue
+            changedIds.forEach { scheduler.cancelReminder(item.id, it) }
+            repo.save(item.copy(
+                remindAt = reminders.minOfOrNull { it.at },
+                reminderRevision = nextRevision,
+                reminders = reminders,
+            ))
         }
     }
 

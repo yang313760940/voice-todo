@@ -25,6 +25,7 @@ import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoList
 import com.voicetodo.domain.TodoView
 import com.voicetodo.domain.ReminderOutcome
+import com.voicetodo.domain.MissedReminder
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.isOverdue
@@ -168,6 +169,17 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
             }
         }
         item { StorageStatus(state, vm::onRetryStorage) }
+        if (state.missedReminders.isNotEmpty()) {
+            item {
+                MissedRemindersCard(
+                    reminders = state.missedReminders,
+                    zone = vm.zoneId,
+                    enabled = enabled,
+                    onComplete = vm::onComplete,
+                    onReschedule = vm::onOpenDetail,
+                )
+            }
+        }
         if (showCreateList) {
             item {
                 CreateListPanel(
@@ -264,6 +276,47 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
                         onDelete = { vm.onDelete(child.id) },
                         onRetry = { vm.onRetryReminders(child.id) },
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MissedRemindersCard(
+    reminders: List<MissedReminder>,
+    zone: ZoneId,
+    enabled: Boolean,
+    onComplete: (String) -> Unit,
+    onReschedule: (String) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().testTag("missed_reminders")) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("错过的提醒（${reminders.size}）", style = MaterialTheme.typography.titleMedium)
+            Text("不会集中补响。请完成事项或重新安排未来时间。",
+                style = MaterialTheme.typography.bodySmall)
+            reminders.forEach { missed ->
+                Column(Modifier.fillMaxWidth().testTag("missed_${missed.reminderId}")) {
+                    Text(missed.item.title, fontWeight = FontWeight.Medium)
+                    Text(
+                        "原提醒时间：${missed.originalAt.atZone(zone).format(timeFmt)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = { onComplete(missed.item.id) },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("complete_missed_${missed.reminderId}"),
+                        ) { Text("完成") }
+                        TextButton(
+                            onClick = { onReschedule(missed.item.id) },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("reschedule_missed_${missed.reminderId}"),
+                        ) { Text("重新安排") }
+                    }
                 }
             }
         }

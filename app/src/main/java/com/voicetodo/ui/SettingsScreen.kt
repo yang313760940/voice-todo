@@ -433,6 +433,16 @@ internal fun PermissionsGuidanceScreen(
                     capabilities?.notificationConditionsReady,
                     "这里只表示权限、应用开关和频道均允许；实际到点展示仍需设备验证。",
                 )
+                Text(
+                    "开机解锁、应用更新、时间/时区变化、精确闹钟权限恢复或重新打开应用时会对账未来提醒；开机恢复只重建调度，不直接启动响铃服务。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("reminder_recovery_triggers"),
+                )
+                Text(
+                    "系统“强制停止”会阻止应用接收广播；只能在你再次打开应用等用户交互后恢复，强停期间不承诺响铃。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("force_stop_boundary"),
+                )
             }
         }
         item {

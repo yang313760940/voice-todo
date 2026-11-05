@@ -252,6 +252,28 @@ class TodoScreenTest {
         compose.onNodeWithTag("overdue_${item.id}", useUnmergedTree = true).assertDoesNotExist()
     }
 
+    @Test fun missedReminderSummaryShowsOriginalTimeAndOffersCompleteOrReschedule() {
+        val at = clock.now().minusSeconds(60)
+        val item = TodoItem(
+            id = "missed-summary",
+            title = "错过事项",
+            remindAt = at,
+            createdAt = at.minusSeconds(60),
+            reminders = listOf(TodoReminder("missed-reminder", at,
+                outcome = ReminderOutcome.Scheduled)),
+        )
+        runBlocking { repo.save(item) }
+
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.missedReminders.size == 1 }
+        compose.onNodeWithTag("missed_reminders").assertIsDisplayed()
+        compose.onNodeWithText("原提醒时间：2026-11-04 16:59").assertIsDisplayed()
+        compose.onNodeWithTag("reschedule_missed_missed-reminder").performClick()
+        waitFor { vm.state.value.detail?.original?.id == item.id }
+        compose.onNodeWithTag("detail_reminder_value_0")
+            .assertTextContains("2026-11-04 16:59", substring = true)
+    }
+
     @Test fun speechDraftCanBeEditedAndManualReminderFeedbackDistinguishesSchedulerFailure() {
         openAdd()
         compose.runOnIdle { vm.transcribeSamplesForTest(floatArrayOf(0f), 16000) }

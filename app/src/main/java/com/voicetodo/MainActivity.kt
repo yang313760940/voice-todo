@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         settingsViewModel.refreshCapabilities()
+        (application as VoiceTodoApp).requestReminderReconcile()
     }
 
     /** 首次进入请求运行时权限；特殊访问由提醒能力页按用户操作打开。 */

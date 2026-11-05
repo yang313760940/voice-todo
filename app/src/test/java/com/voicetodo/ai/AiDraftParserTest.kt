@@ -120,4 +120,36 @@ class AiDraftParserTest {
             assertTrue(e.message!!.contains("截止"))
         }
     }
+
+    @Test
+    fun `parses separate drafts with recurring suggestion and keeps shared source text`() {
+        val content = """
+            {
+              "drafts": [
+                {"title": "买菜", "plannedDate": "2026-11-06"},
+                {
+                  "title": "锻炼",
+                  "recurrence": {
+                    "frequency": "WEEKLY",
+                    "weekdays": [1, 3, 5],
+                    "time": "18:30"
+                  }
+                },
+                {"title": "交报告", "clarification": "请补充具体日期"}
+              ]
+            }
+        """.trimIndent()
+
+        val drafts = AiDraftParser.parseDrafts(content, "明天买菜，每周一三五六点半锻炼，过几天交报告", zone)
+
+        assertEquals(listOf("买菜", "锻炼", "交报告"), drafts.map { it.title })
+        assertEquals(3, drafts.map { it.itemId }.distinct().size)
+        assertTrue(drafts.all { it.sourceText == "明天买菜，每周一三五六点半锻炼，过几天交报告" })
+        assertTrue(drafts[0].reminders.isEmpty())
+        assertEquals(com.voicetodo.domain.RecurrenceFrequency.Weekly, drafts[1].recurrence!!.frequency)
+        assertEquals(setOf(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.WEDNESDAY,
+            java.time.DayOfWeek.FRIDAY), drafts[1].recurrence!!.weekdays)
+        assertEquals("18:30", drafts[1].recurrence!!.time)
+        assertTrue(drafts[2].requiresNoReminderAcknowledgement)
+    }
 }

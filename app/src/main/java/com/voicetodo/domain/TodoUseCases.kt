@@ -63,6 +63,15 @@ data class UpdateResult(
     val outcome: ReminderOutcome?,
 )
 
+/** 一次批量确认中的一条事项草稿；重复草稿会先转换成当前重复规则。 */
+data class TodoDraftInput(
+    val itemId: String,
+    val edit: TodoEdit,
+    val quadrant: Quadrant = Quadrant.NotImportantNotUrgent,
+    val suggestedQuadrant: Quadrant? = null,
+    val recurrence: RecurrenceRule? = null,
+)
+
 /** 通知入口“延后提醒”的预设时长。 */
 enum class SnoozeOption(val minutes: Long) {
     TenMinutes(10),
@@ -377,8 +386,13 @@ class TodoUseCases(
         val reminders = item.reminders.map { reminder ->
             if (reminder.outcome != ReminderOutcome.NotReady || reminder.deliveredAt != null ||
                 !reminder.at.isAfter(clock.now())) reminder else reminder.copy(
-                outcome = if (scheduler.scheduleReminder(item.id, item.title, reminder.id, reminder.at,
-                        reminder.revision)) ReminderOutcome.Scheduled else ReminderOutcome.NotReady)
+                outcome = if (try {
+                    scheduler.scheduleReminder(item.id, item.title, reminder.id, reminder.at,
+                        reminder.revision)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    false
+                }) ReminderOutcome.Scheduled else ReminderOutcome.NotReady)
         }
         val scheduled = item.copy(reminders = reminders)
         repo.save(scheduled)
@@ -499,6 +513,45 @@ class TodoUseCases(
             ReminderOutcome.NotReady
         }
         ConfirmResult(item, outcome)
+    }
+
+    /**
+     * 用户一次确认多条草稿：先校验全部，再以一个数据库事务保存，
+     * 最后才对已保存的提醒请求系统调度。重复确认使用同一草稿身份，不重复创建。
+     */
+    suspend fun confirmDrafts(drafts: List<TodoDraftInput>): List<ConfirmResult> = mutations.withLock {
+        require(drafts.isNotEmpty()) { "请至少保留一条草稿" }
+        require(drafts.map { it.itemId }.distinct().size == drafts.size) { "草稿身份不能重复" }
+        val now = clock.now()
+        val roots = mutableListOf<TodoItem>()
+        val occurrences = mutableListOf<TodoItem>()
+
+        drafts.forEach { draft ->
+            val root = repo.findById(draft.itemId) ?: buildDraftRoot(draft, now)
+            roots += root
+            root.recurrence?.let { occurrences += buildUpcomingOccurrences(root, now) }
+        }
+
+        val saved = repo.insertDrafts(roots + occurrences)
+        val savedById = saved.associateBy { it.id }
+        val occurrencesBySeries = saved.filter { it.seriesId != null }.groupBy { it.seriesId }
+
+        drafts.map { draft ->
+            val root = savedById.getValue(draft.itemId)
+            if (root.recurrence == null) {
+                val (scheduled, outcome) = scheduleMultiple(root)
+                ConfirmResult(scheduled, outcome)
+            } else {
+                var outcome = ReminderOutcome.NotRequested
+                occurrencesBySeries[root.id].orEmpty()
+                    .filter { it.completedAt == null }
+                    .forEach {
+                        val (_, occurrenceOutcome) = scheduleMultiple(it)
+                        outcome = mergeOutcome(outcome, occurrenceOutcome)
+                    }
+                ConfirmResult(root, outcome)
+            }
+        }
     }
 
     /**
@@ -836,6 +889,99 @@ class TodoUseCases(
             candidate = rule.nextOccurrenceAfter(date)
         }
         return outcome
+    }
+
+    private suspend fun buildDraftRoot(draft: TodoDraftInput, now: Instant): TodoItem {
+        require(draft.itemId.isNotBlank()) { "草稿身份不能为空" }
+        val title = draft.edit.title.trim()
+        require(title.isNotEmpty()) { "标题不能为空" }
+        draft.edit.listId?.let { require(repo.findListById(it) != null) { "清单不存在" } }
+        draft.recurrence?.let { rule ->
+            rule.validate()
+            return TodoItem(
+                id = draft.itemId,
+                title = title,
+                createdAt = now,
+                quadrant = draft.quadrant,
+                suggestedQuadrant = draft.suggestedQuadrant,
+                listId = draft.edit.listId,
+                recurrence = rule,
+            )
+        }
+        val rules = draft.edit.reminders.orEmpty().ifEmpty {
+            draft.edit.remindAt?.let { listOf(ReminderEdit(id = draft.itemId, at = it)) }.orEmpty()
+        }
+        validateReminderRules(rules)
+        val reminders = rules.map { rule ->
+            val at = resolveReminderTime(rule, draft.edit.dueAt)
+            require(at.isAfter(now)) { "提醒时间必须晚于当前时间" }
+            TodoReminder(rule.id, at, rule.beforeDue)
+        }
+        return TodoItem(
+            id = draft.itemId,
+            title = title,
+            remindAt = reminders.firstOrNull()?.at,
+            plannedDate = draft.edit.plannedDate,
+            dueAt = draft.edit.dueAt,
+            createdAt = now,
+            reminders = reminders,
+            quadrant = draft.quadrant,
+            suggestedQuadrant = draft.suggestedQuadrant,
+            listId = draft.edit.listId,
+        )
+    }
+
+    private fun validateReminderRules(rules: List<ReminderEdit>) {
+        require(rules.map { it.id }.distinct().size == rules.size) {
+            "同一事项的提醒身份不能重复"
+        }
+        rules.forEach { rule ->
+            require(rule.id.isNotBlank()) { "提醒身份不能为空" }
+            require((rule.at == null) != (rule.beforeDue == null)) {
+                "请选择一种提醒：指定时刻或相对截止"
+            }
+            rule.beforeDue?.let {
+                require(!it.isNegative && !it.isZero) { "提前时长必须大于零" }
+            }
+        }
+    }
+
+    private fun resolveReminderTime(rule: ReminderEdit, dueAt: Instant?): Instant =
+        rule.at ?: requireNotNull(dueAt) { "相对提醒需要截止时间" }
+            .minus(requireNotNull(rule.beforeDue) { "请选择指定时刻或相对提醒" })
+
+    private fun buildUpcomingOccurrences(series: TodoItem, now: Instant): List<TodoItem> {
+        val rule = series.recurrence ?: return emptyList()
+        val today = now.atZone(zone).toLocalDate()
+        var candidate = rule.firstOccurrenceOnOrAfter(maxOf(today, rule.startDate))
+        val instances = mutableListOf<TodoItem>()
+        var guard = 0
+        while (instances.size < FUTURE_INSTANCES && guard++ < 1000) {
+            val date = candidate
+            val instants = rule.reminderTimes.map { rule.instantOn(date, it, zone) }
+            if (instants.any { it.isAfter(now) }) {
+                instances += TodoItem(
+                    id = rule.occurrenceId(series.id, date),
+                    title = series.title,
+                    remindAt = instants.filter { it.isAfter(now) }.minOrNull(),
+                    plannedDate = date,
+                    createdAt = now,
+                    reminders = rule.reminderTimes.mapIndexed { index, _ ->
+                        TodoReminder(rule.reminderId(series.id, date, index), instants[index])
+                    },
+                    quadrant = series.quadrant,
+                    suggestedQuadrant = series.suggestedQuadrant,
+                    seriesId = series.id,
+                    occurrenceDate = date,
+                    listId = series.listId,
+                    persistentRing = series.persistentRing,
+                    readAloud = series.readAloud,
+                    readAloudWhenLocked = series.readAloudWhenLocked,
+                )
+            }
+            candidate = rule.nextOccurrenceAfter(date)
+        }
+        return instances
     }
 
     private suspend fun stopSeries(series: TodoItem) {

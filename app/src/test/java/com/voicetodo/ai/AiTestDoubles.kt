@@ -14,6 +14,7 @@ class MemoryAiSettingsStore(var settings: AiSettings? = null) : AiSettingsStore 
 
 class FakeAiAssistClient(
     var result: AiDraft? = null,
+    var results: List<AiDraft>? = null,
     var failure: Exception? = null,
 ) : AiAssistClient {
     var calls = 0
@@ -25,12 +26,18 @@ class FakeAiAssistClient(
         text: String,
         context: AiPromptContext,
         settings: AiSettings,
-    ): AiDraft {
+    ): AiDraft = organizeDrafts(text, context, settings).single()
+
+    override suspend fun organizeDrafts(
+        text: String,
+        context: AiPromptContext,
+        settings: AiSettings,
+    ): List<AiDraft> {
         calls++
         receivedTexts += text
         receivedContexts += context
         gate?.await()
         failure?.let { throw it }
-        return requireNotNull(result) { "测试未提供 AI 结果" }
+        return results ?: listOf(requireNotNull(result) { "测试未提供 AI 结果" })
     }
 }

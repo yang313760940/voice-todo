@@ -28,6 +28,7 @@ import com.voicetodo.domain.ReminderOutcome
 import com.voicetodo.domain.MissedReminder
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
+import com.voicetodo.domain.RecurringDeleteScope
 import com.voicetodo.domain.isOverdue
 import com.voicetodo.domain.buildDisplayGroups
 import com.voicetodo.domain.itemsForView
@@ -50,13 +51,14 @@ fun TodoScreen(vm: TodoViewModel) {
         onPauseOrDispose { }
     }
     val modalOpen = state.aiSettingsForm != null || state.aiDraft != null ||
-        state.detail != null || state.addOpen
+        state.detail != null || state.addOpen || state.pendingRecurringDeleteId != null
     BackHandler(enabled = modalOpen) {
         when {
             state.aiSettingsForm != null -> vm.onCloseAiSettings()
             state.aiDraft != null -> vm.onCancelAiDraft()
             state.detail != null -> vm.onCancelDetail()
             state.addOpen -> vm.onCloseAdd()
+            state.pendingRecurringDeleteId != null -> vm.onCancelRecurringDelete()
         }
     }
     val baseEnabled = !state.loading && !state.busy && state.storageError == null
@@ -79,6 +81,32 @@ fun TodoScreen(vm: TodoViewModel) {
         return
     }
     TodoHomeScreen(vm, state, enabled)
+    if (state.pendingRecurringDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = vm::onCancelRecurringDelete,
+            title = { Text("删除重复事项") },
+            text = { Text("请选择只删除这一次，还是删除本次及以后的未完成实例。已完成历史会保留。") },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisOnly) },
+                        modifier = Modifier.testTag("delete_scope_this"),
+                    ) { Text("仅删除本次") }
+                    TextButton(
+                        onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisAndFuture) },
+                        modifier = Modifier.testTag("delete_scope_future"),
+                    ) { Text("本次及以后") }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = vm::onCancelRecurringDelete,
+                    modifier = Modifier.testTag("delete_scope_cancel"),
+                ) { Text("取消") }
+            },
+            modifier = Modifier.testTag("delete_scope_dialog"),
+        )
+    }
 }
 
 @Composable
@@ -990,7 +1018,11 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
                     modifier = Modifier.testTag(if (item.completedAt == null) "complete_${item.id}" else "restore_${item.id}")) {
                     Text(if (item.completedAt == null) "完成" else "恢复")
                 }
-                if (item.seriesId == null) TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
+                TextButton(
+                    onClick = onDelete,
+                    enabled = enabled,
+                    modifier = Modifier.testTag("delete_${item.id}"),
+                ) { Text("删除") }
                 if (item.completedAt == null && item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
                     TextButton(onClick = onRetry, enabled = enabled,
                         modifier = Modifier.testTag("retry_reminders_${item.id}")) { Text("重试提醒") }

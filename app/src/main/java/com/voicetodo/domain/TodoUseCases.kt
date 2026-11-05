@@ -818,14 +818,132 @@ class TodoUseCases(
         )
     }
 
-    /** 删除事项并取消其未来闹钟。 */
-    suspend fun deleteItem(id: String) = mutations.withLock {
-        val item = repo.findById(id)
-        if (item?.recurrence != null) {
-            stopSeries(item)
+    /** 删除事项到 30 天回收站，并立即撤销其未来闹钟。 */
+    suspend fun deleteItem(
+        id: String,
+        scope: RecurringDeleteScope = RecurringDeleteScope.ThisOnly,
+    ) = mutations.withLock {
+        val item = repo.findById(id) ?: return@withLock
+        val now = clock.now()
+        when {
+            item.recurrence != null -> softDeleteSeries(item, null, now)
+            item.seriesId != null && scope == RecurringDeleteScope.ThisAndFuture -> {
+                val series = repo.findById(item.seriesId)
+                    ?: throw IllegalArgumentException("重复安排不存在")
+                softDeleteSeries(series, item.occurrenceDate, now)
+            }
+            else -> softDeleteLocked(item, now)
+        }
+    }
+
+    /** 回收站列表；进入前顺手清理已满 30 天的事项。 */
+    suspend fun listTrash(): List<TrashedItem> = mutations.withLock {
+        val now = clock.now()
+        cleanupExpiredTrashLocked(now)
+        repo.trashed().mapNotNull { item ->
+            item.deletedAt?.let { TrashedItem.from(item, now) }
+        }
+    }
+
+    suspend fun cleanupExpiredTrash() = mutations.withLock {
+        cleanupExpiredTrashLocked(clock.now())
+    }
+
+    suspend fun permanentlyDelete(id: String) = mutations.withLock {
+        val item = repo.findAnyById(id) ?: return@withLock
+        require(item.deletedAt != null) { "事项不在回收站" }
+        repo.delete(id)
+        scheduler.cancel(id)
+        item.reminders.forEach { scheduler.cancelReminder(item.id, it.id) }
+    }
+
+    /**
+     * 从回收站恢复：保留原属性；过去提醒清除，未来提醒重新排期，不立即补响。
+     */
+    suspend fun restoreDeleted(id: String): RestoreResult = mutations.withLock {
+        val item = repo.findAnyById(id) ?: throw IllegalArgumentException("事项不存在")
+        require(item.deletedAt != null) { "事项不在回收站" }
+        val now = clock.now()
+        val revision = item.reminderRevision + 1
+        val hadReminders = item.reminders.isNotEmpty()
+        val futureReminders = item.reminders.filter { it.at.isAfter(now) }.map {
+            it.copy(revision = revision, outcome = ReminderOutcome.NotReady, deliveredAt = null)
+        }
+        val pastReminderCleared = if (hadReminders) {
+            futureReminders.size != item.reminders.size
         } else {
-            repo.delete(id)
-            scheduler.cancel(id)
+            item.remindAt != null && !item.remindAt.isAfter(now)
+        }
+        val restored = item.copy(
+            deletedAt = null,
+            dismissedAt = null,
+            reminderRevision = revision,
+            reminders = if (hadReminders) futureReminders else item.reminders,
+            remindAt = when {
+                hadReminders -> futureReminders.firstOrNull()?.at
+                item.remindAt?.isAfter(now) == true -> item.remindAt
+                else -> null
+            },
+        )
+        repo.save(restored)
+        scheduler.cancel(id)
+        item.reminders.forEach { scheduler.cancelReminder(item.id, it.id) }
+
+        var outcome = when {
+            restored.completedAt != null -> ReminderOutcome.NotRequested
+            futureReminders.isNotEmpty() -> scheduleMultiple(restored).second
+            !hadReminders && restored.remindAt != null -> {
+                if (scheduler.schedule(restored.id, restored.title, restored.remindAt,
+                        restored.reminderRevision)) ReminderOutcome.Scheduled else ReminderOutcome.NotReady
+            }
+            else -> ReminderOutcome.NotRequested
+        }
+        val seriesId = restored.seriesId
+        if (seriesId != null) {
+            outcome = mergeOutcome(outcome, ensureSeriesFor(seriesId, now))
+        }
+        if (restored.recurrence != null) {
+            outcome = mergeOutcome(outcome, ensureSeries(
+                restored,
+                repo.all().filter { it.seriesId == restored.id },
+                now,
+            ))
+        }
+        RestoreResult(
+            item = repo.findAnyById(id) ?: restored,
+            outcome = outcome,
+            pastReminderCleared = pastReminderCleared,
+        )
+    }
+
+    private suspend fun softDeleteLocked(item: TodoItem, now: Instant) {
+        if (item.deletedAt != null) return
+        val deleted = item.copy(
+            deletedAt = now,
+            reminderRevision = item.reminderRevision + 1,
+            reminders = item.reminders.map { it.copy(outcome = ReminderOutcome.NotRequested) },
+        )
+        repo.save(deleted)
+        scheduler.cancel(item.id)
+        item.reminders.forEach { scheduler.cancelReminder(item.id, it.id) }
+    }
+
+    private suspend fun softDeleteSeries(series: TodoItem, fromDate: java.time.LocalDate?, now: Instant) {
+        repo.incomplete().filter {
+            it.seriesId == series.id &&
+                (fromDate == null || (it.occurrenceDate != null && !it.occurrenceDate.isBefore(fromDate)))
+        }.forEach { softDeleteLocked(it, now) }
+        softDeleteLocked(series, now)
+    }
+
+    private suspend fun cleanupExpiredTrashLocked(now: Instant) {
+        val cutoff = now.minus(Duration.ofDays(TRASH_RETENTION_DAYS))
+        repo.trashed().filter { item ->
+            item.deletedAt?.let { !it.isAfter(cutoff) } == true
+        }.forEach { item ->
+            repo.delete(item.id)
+            scheduler.cancel(item.id)
+            item.reminders.forEach { scheduler.cancelReminder(item.id, it.id) }
         }
     }
 
@@ -837,10 +955,10 @@ class TodoUseCases(
         }
     }
 
-    private suspend fun ensureSeriesFor(seriesId: String, now: Instant) {
-        val series = repo.findById(seriesId) ?: return
-        if (series.recurrence == null) return
-        ensureSeries(series, repo.all().filter { it.seriesId == seriesId }, now)
+    private suspend fun ensureSeriesFor(seriesId: String, now: Instant): ReminderOutcome {
+        val series = repo.findById(seriesId) ?: return ReminderOutcome.NotRequested
+        if (series.recurrence == null) return ReminderOutcome.NotRequested
+        return ensureSeries(series, repo.all().filter { it.seriesId == seriesId }, now)
     }
 
     private suspend fun ensureSeries(
@@ -850,7 +968,10 @@ class TodoUseCases(
     ): ReminderOutcome {
         val rule = series.recurrence ?: return ReminderOutcome.NotRequested
         val today = now.atZone(zone).toLocalDate()
-        val existingDates = occurrences.mapNotNull { it.occurrenceDate }.toSet()
+        val existingDates = repo.allIncludingDeleted()
+            .filter { it.seriesId == series.id }
+            .mapNotNull { it.occurrenceDate }
+            .toSet()
         var upcomingCount = occurrences.count {
             it.completedAt == null && it.occurrenceDate != null && !it.occurrenceDate.isBefore(today) &&
                 (it.reminders.isEmpty() || it.reminders.any { reminder -> reminder.at.isAfter(now) })

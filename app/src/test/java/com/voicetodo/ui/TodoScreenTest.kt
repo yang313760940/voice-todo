@@ -530,6 +530,46 @@ class TodoScreenTest {
         Assert.assertEquals(listOf(LocalTime.of(20, 0)), runBlocking { uc.findItem(series.id) }.recurrence!!.reminderTimes)
     }
 
+    @Test fun deletingRecurringInstanceAsksScopeAndThisOnlyKeepsFollowingInstances() {
+        val series = runBlocking {
+            uc.createRecurring("每日复盘", RecurrenceRule(RecurrenceFrequency.Daily,
+                LocalDate.of(2026, 11, 4), reminderTimes = listOf(LocalTime.of(20, 0))))
+        }.item
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.items.count { it.seriesId == series.id } == 2 }
+        val first = vm.state.value.items.filter { it.seriesId == series.id }
+            .minBy { it.occurrenceDate!! }
+
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("delete_${first.id}"))
+        compose.onNodeWithTag("delete_${first.id}").performClick()
+        compose.onNodeWithTag("delete_scope_dialog").assertIsDisplayed()
+        compose.onNodeWithTag("delete_scope_this").performClick()
+        waitFor { vm.state.value.items.none { it.id == first.id } && !vm.state.value.busy }
+
+        Assert.assertNotNull(runBlocking { repo.findAnyById(first.id)?.deletedAt })
+        Assert.assertTrue(vm.state.value.items.any { it.seriesId == series.id })
+        Assert.assertNotNull(runBlocking { uc.findItem(series.id) })
+    }
+
+    @Test fun deletingRecurringInstanceThisAndFutureStopsSeriesAndMovesInstancesToTrash() {
+        val series = runBlocking {
+            uc.createRecurring("未来删除", RecurrenceRule(RecurrenceFrequency.Daily,
+                LocalDate.of(2026, 11, 4), reminderTimes = listOf(LocalTime.of(20, 0))))
+        }.item
+        compose.runOnIdle { vm.onRefresh() }
+        waitFor { vm.state.value.items.count { it.seriesId == series.id } == 2 }
+        val first = vm.state.value.items.filter { it.seriesId == series.id }
+            .minBy { it.occurrenceDate!! }
+
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("delete_${first.id}"))
+        compose.onNodeWithTag("delete_${first.id}").performClick()
+        compose.onNodeWithTag("delete_scope_future").performClick()
+        waitFor { vm.state.value.items.none { it.seriesId == series.id } && !vm.state.value.busy }
+
+        Assert.assertNotNull(runBlocking { repo.findAnyById(series.id)?.deletedAt })
+        Assert.assertTrue(runBlocking { uc.listTrash().size >= 2 })
+    }
+
     @Test fun editingRecurringInstanceThisAndFutureUpdatesFollowingInstances() {
         val series = runBlocking {
             uc.createRecurring("复盘", RecurrenceRule(RecurrenceFrequency.Daily,

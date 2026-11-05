@@ -51,6 +51,8 @@ data class TodoItem(
      * 完成事项不改它；它与提醒修订号、提醒时刻一起判定当前提醒是否仍有效。
      */
     val dismissedAt: Instant? = null,
+    /** 进入回收站的时刻；为空表示正常事项。删除时立即撤销全部未来提醒。 */
+    val deletedAt: Instant? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */

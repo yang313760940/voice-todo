@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,6 +43,7 @@ import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.domain.BackupPreview
 import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.RestoreCopyInfo
+import com.voicetodo.domain.TrashedItem
 import com.voicetodo.settings.AppPreferences
 import com.voicetodo.settings.FontSizePreference
 import com.voicetodo.settings.ThemePreference
@@ -102,8 +107,17 @@ fun SettingsScreen(
             todoVm.refreshAfterExternalDataChange()
         }
     }
+    LaunchedEffect(settingsState.trash.changeGeneration) {
+        if (settingsState.trash.changeGeneration > 0) {
+            todoVm.refreshAfterExternalDataChange()
+        }
+    }
     LaunchedEffect(destination) {
-        if (destination == SettingsDestination.Data) settingsVm.refreshRestoreCopies()
+        when (destination) {
+            SettingsDestination.Data -> settingsVm.refreshRestoreCopies()
+            SettingsDestination.Trash -> settingsVm.refreshTrash()
+            else -> Unit
+        }
     }
 
     LifecycleResumeEffect(settingsVm) {
@@ -155,11 +169,12 @@ fun SettingsScreen(
             onCancelImport = settingsVm::cancelImport,
             onPreviewRestoreCopy = settingsVm::previewRestoreCopy,
         )
-        SettingsDestination.Trash -> PendingFeatureScreen(
-            title = "回收站",
-            body = "30 天回收站、恢复与重复事项删除范围将由 #20 交付。此入口已经保留。",
-            testTag = "trash_screen",
+        SettingsDestination.Trash -> TrashScreen(
+            state = settingsState.trash,
             onBack = { destination = SettingsDestination.Root },
+            onRestore = settingsVm::restoreTrash,
+            onPermanentlyDelete = settingsVm::permanentlyDeleteTrash,
+            onRefresh = settingsVm::refreshTrash,
         )
         SettingsDestination.About -> AboutScreen(
             appVersion = appVersion,
@@ -858,26 +873,114 @@ private fun RestoreCopyRow(
 }
 
 @Composable
-private fun PendingFeatureScreen(
-    title: String,
-    body: String,
-    testTag: String,
+internal fun TrashScreen(
+    state: TrashUiState,
     onBack: () -> Unit,
+    onRestore: (String) -> Unit,
+    onPermanentlyDelete: (String) -> Unit,
+    onRefresh: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp).testTag(testTag),
+    var pendingDelete by remember { mutableStateOf<TrashedItem?>(null) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp).testTag("trash_screen"),
+        contentPadding = PaddingValues(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(title, style = MaterialTheme.typography.headlineSmall)
-        HorizontalDivider()
-        Text(body)
-        Text(
-            "该分组入口已纳入四个底部页面；具体数据操作不会在依赖票完成前伪装为可用。",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Button(onClick = onBack, modifier = Modifier.testTag("${testTag}_back")) {
-            Text("返回我的")
+        item {
+            Text("回收站", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "删除的事项保留 30 天。恢复时会清除已经过去的提醒，未来提醒重新安排。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onBack, modifier = Modifier.testTag("trash_back")) {
+                    Text("返回我的")
+                }
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !state.busy,
+                    modifier = Modifier.testTag("trash_refresh"),
+                ) { Text("刷新") }
+            }
         }
+        state.error?.let { message ->
+            item {
+                Text(message, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("trash_error"))
+            }
+        }
+        state.message?.let { message ->
+            item { Text(message, modifier = Modifier.testTag("trash_message")) }
+        }
+        if (state.busy) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator()
+                    Text("正在处理…", modifier = Modifier.padding(start = 12.dp))
+                }
+            }
+        }
+        if (!state.busy && state.items.isEmpty()) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Text("回收站为空", modifier = Modifier.padding(16.dp).testTag("trash_empty"))
+                }
+            }
+        }
+        itemsIndexed(state.items, key = { _, trashed -> trashed.item.id }) { index, trashed ->
+            Card(Modifier.fillMaxWidth().testTag("trash_item_$index")) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        trashed.item.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.testTag("trash_title_$index"),
+                    )
+                    Text(
+                        "剩余 ${trashed.daysRemaining} 天 · 删除于 ${BACKUP_DISPLAY_TIME.format(trashed.deletedAt)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("trash_remaining_$index"),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onRestore(trashed.item.id) },
+                            enabled = !state.busy,
+                            modifier = Modifier.testTag("trash_restore_$index"),
+                        ) { Text("恢复") }
+                        TextButton(
+                            onClick = { pendingDelete = trashed },
+                            enabled = !state.busy,
+                            modifier = Modifier.testTag("trash_delete_$index"),
+                        ) { Text("永久删除") }
+                    }
+                }
+            }
+        }
+    }
+    pendingDelete?.let { trashed ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("永久删除事项") },
+            text = { Text("「${trashed.item.title}」将立即永久删除，无法再恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        onPermanentlyDelete(trashed.item.id)
+                    },
+                    modifier = Modifier.testTag("trash_confirm_delete"),
+                ) { Text("永久删除") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingDelete = null },
+                    modifier = Modifier.testTag("trash_cancel_delete"),
+                ) { Text("取消") }
+            },
+            modifier = Modifier.testTag("trash_delete_dialog"),
+        )
     }
 }
 

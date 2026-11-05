@@ -29,6 +29,7 @@ import com.voicetodo.domain.Clock
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
+import com.voicetodo.domain.RecurringDeleteScope
 import com.voicetodo.domain.RecurringEditScope
 import com.voicetodo.domain.MissedReminder
 import com.voicetodo.data.RoomTodoRepository
@@ -183,6 +184,8 @@ data class UiState(
     val aiError: String? = null,
     val seriesLabels: Map<String, String> = emptyMap(),
     val missedReminders: List<MissedReminder> = emptyList(),
+    /** 删除重复实例前等待用户选择作用范围。 */
+    val pendingRecurringDeleteId: String? = null,
     /** 已展开的积压系列 id；仅影响列表折叠展示。 */
     val expandedBacklogSeries: Set<String> = emptySet(),
 ) {
@@ -273,6 +276,7 @@ class TodoViewModel @JvmOverloads constructor(
             selectedAiDraftId = null,
             aiError = null,
             aiBusy = false,
+            pendingRecurringDeleteId = null,
             message = null,
         )
         refresh()
@@ -842,10 +846,35 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onDelete(id: String) {
+        val item = (_state.value.items + _state.value.completedItems).firstOrNull { it.id == id }
+        if (item?.seriesId != null && item.completedAt == null) {
+            _state.value = _state.value.copy(pendingRecurringDeleteId = id, message = null)
+            return
+        }
         action {
-            useCases.deleteItem(id)
+            useCases.deleteItem(id, RecurringDeleteScope.ThisOnly)
+            _state.value = _state.value.copy(message = "已移到回收站，可在 30 天内恢复")
             reload()
         }
+    }
+
+    fun onConfirmRecurringDelete(scope: RecurringDeleteScope) {
+        val id = _state.value.pendingRecurringDeleteId ?: return
+        _state.value = _state.value.copy(pendingRecurringDeleteId = null)
+        action {
+            useCases.deleteItem(id, scope)
+            _state.value = _state.value.copy(
+                message = when (scope) {
+                    RecurringDeleteScope.ThisOnly -> "本次实例已移到回收站，后续重复安排不变"
+                    RecurringDeleteScope.ThisAndFuture -> "本次及以后的未完成实例已移到回收站，重复安排已停止"
+                },
+            )
+            reload()
+        }
+    }
+
+    fun onCancelRecurringDelete() {
+        _state.value = _state.value.copy(pendingRecurringDeleteId = null)
     }
 
     /** 四象限移动只改分类；提醒、截止、计划日期与清单均保持不变。 */

@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Serial,
     [string]$Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
     [string]$EvidenceDir = ".work/lock-screen-reminder",
-    [switch]$ExitProcess
+    [switch]$ExitProcess,
+    # 提前量越大，应用越可能在到点前被厂商后台策略冻结；验收矩阵需要覆盖这两种情形。
+    [int]$DelaySec = 45
 )
 $ErrorActionPreference = 'Stop'
 $package = 'com.voicetodo.app'
@@ -23,8 +25,12 @@ function Save-Snapshot([string]$Name, [string[]]$Arguments) {
 $itemId = $null
 try {
     Invoke-Adb @('shell', 'input', 'keyevent', '224') | Out-Null
+        # 唤醒并进入前台再调度：厂商系统会丢弃发给后台空闲应用的 adb 广播，
+        # 这不是验收项本身要观察的行为。
+        Invoke-Adb @('shell', 'am', 'start', '-n', "$package/com.voicetodo.MainActivity") | Out-Null
+        Start-Sleep -Seconds 2
     $scheduled = Save-Snapshot 'schedule' @('shell', 'am', 'broadcast', '-a',
-        'com.voicetodo.debug.SCHEDULE', '-n', $driver)
+        'com.voicetodo.debug.SCHEDULE', '-n', $driver, '--ei', 'delaySec', "$DelaySec")
     if ($scheduled -notmatch 'scheduledItem=([a-zA-Z0-9-]+)') { throw 'No scheduled item returned' }
     $itemId = $Matches[1]
     if ($scheduled -notmatch 'fireAt=(\d+)') { throw 'No trigger time returned' }
@@ -45,11 +51,19 @@ try {
     if ($power -notmatch 'mWakefulness=(Asleep|Dozing)') { throw 'Device did not sleep' }
 
     # 以设备时钟为准，避免宿主时钟或时区偏差。
-    $nowText = (Invoke-Adb @('shell', 'date', '+%s')).Trim()
+    $nowText = ''
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        $candidate = (Invoke-Adb @('shell', 'date', '+%s')).Trim()
+        if ($candidate -match '^\d+$') {
+            $nowText = $candidate
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    }
     if ($nowText -notmatch '^\d+$') { throw "Unexpected device time: $nowText" }
     $now = [long]::Parse($nowText, [Globalization.CultureInfo]::InvariantCulture) * 1000
     $wait = [Math]::Max(1, [Math]::Ceiling(($fireAt - $now) / 1000) + 3)
-    if ($wait -gt 60) { throw "Unexpected trigger time: wait=$wait" }
+    if ($wait -gt ($DelaySec + 30)) { throw "Unexpected trigger time: wait=$wait" }
     Start-Sleep -Seconds $wait
     Save-Snapshot 'after-alarm' @('shell', 'dumpsys', 'alarm') | Out-Null
     Save-Snapshot 'after-broadcasts' @('shell', 'dumpsys', 'activity', 'broadcasts', $package) | Out-Null

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.util.Log
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.AlarmActionReceiver
 import com.voicetodo.alarm.AlarmReceiver
@@ -20,6 +21,7 @@ import java.time.ZoneId
 class AlarmTestDriverReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as VoiceTodoApp
+        Log.i("AlarmTestDriver", "onReceive action=${intent.action} extras=${intent.extras}")
         if (intent.action == "com.voicetodo.debug.EXIT") {
             Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)
             return
@@ -36,6 +38,10 @@ class AlarmTestDriverReceiver : BroadcastReceiver() {
                 val saved = app.useCases.confirmDraft(title, atInstant)
                 pending.resultCode = if (saved.outcome == com.voicetodo.domain.ReminderOutcome.Scheduled) 0 else 1
                 pending.resultData = "scheduledItem=${saved.item.id} fireAt=${atInstant.toEpochMilli()}"
+                Log.i(
+                    "AlarmTestDriver",
+                    "scheduled outcome=${saved.outcome} item=${saved.item.id} fireAt=${atInstant.toEpochMilli()}",
+                )
             }
             "com.voicetodo.debug.CLEANUP" -> {
                 val id = intent.getStringExtra("itemId") ?: return@launch
@@ -47,12 +53,13 @@ class AlarmTestDriverReceiver : BroadcastReceiver() {
                     })
                 }
                 app.useCases.deleteItem(id)
+                Log.i("AlarmTestDriver", "cleaned item=$id")
             }
         }
         } catch (e: Exception) {
             pending.resultCode = 1
             pending.resultData = e.message
-            android.util.Log.e("AlarmTestDriver", "Driver failed", e)
+            Log.e("AlarmTestDriver", "Driver failed", e)
         } finally { pending.finish() }
         }
     }

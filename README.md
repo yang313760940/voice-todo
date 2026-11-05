@@ -59,5 +59,9 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 - `INTERNET` 仅用于用户主动发起的在线 AI 整理；语音识别始终离线。
 - 精确闹钟 `SCHEDULE_EXACT_ALARM`（12+）为特殊访问，未授予时界面如实显示“未就绪”，
   保存事项但不谎称已安排（`TodoUseCases` 与 `SystemReminderScheduler.capabilities()` 分别反馈）。
+- “我的 → 权限与提醒检查”分别显示事项保存、系统精确调度、通知运行时授权、应用通知总开关、
+  提醒频道、全屏提醒、频道声音、闹钟音量和勿扰状态；从系统设置返回后自动刷新。
+- Android 14 起全屏提醒特殊访问不可用时，不请求不可用的全屏弹出，但仍保留系统允许的通知、
+  响铃及点通知进入提醒界面；锁屏通知和全屏页默认隐藏事项正文，解锁后再显示。
 - 到点使用 `AlarmManager.setAlarmClock` + 系统 `PendingIntent`，进程退出/锁屏仍由系统投递；
   持续响铃用 `mediaPlayback` 前台服务，默认 60 秒后停止发声并保留通知。

@@ -1,6 +1,7 @@
 package com.voicetodo.alarm
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.app.TimePickerDialog
 import android.os.Bundle
 import android.widget.Button
@@ -22,12 +23,15 @@ import java.time.ZoneId
  */
 class AlarmRingActivity : Activity() {
 
+    private lateinit var body: TextView
+    private var reminderTitle: String = "提醒"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val itemId = intent.getStringExtra(SystemReminderScheduler.EXTRA_ITEM_ID) ?: "unknown"
         val reminderId = intent.getStringExtra(SystemReminderScheduler.EXTRA_REMINDER_ID) ?: itemId
         val revision = intent.getLongExtra(SystemReminderScheduler.EXTRA_REVISION, Long.MIN_VALUE)
-        val title = intent.getStringExtra(SystemReminderScheduler.EXTRA_TITLE) ?: "提醒"
+        reminderTitle = intent.getStringExtra(SystemReminderScheduler.EXTRA_TITLE) ?: "提醒"
         val padding = (24 * resources.displayMetrics.density).toInt()
 
         val root = LinearLayout(this).apply {
@@ -35,11 +39,11 @@ class AlarmRingActivity : Activity() {
             setPadding(padding, padding * 3, padding, padding)
         }
         root.addView(TextView(this).apply { text = "提醒"; textSize = 18f })
-        val body = TextView(this).apply {
-            text = title
+        body = TextView(this).apply {
             textSize = 30f
             setPadding(0, padding, 0, padding)
         }
+        refreshVisibleBody()
         root.addView(body)
         val result = TextView(this).apply { textSize = 16f; setPadding(0, padding, 0, padding) }
         root.addView(result)
@@ -108,4 +112,22 @@ class AlarmRingActivity : Activity() {
         })
         setContentView(root)
     }
+
+    override fun onResume() {
+        super.onResume()
+        if (::body.isInitialized) refreshVisibleBody()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::body.isInitialized) refreshVisibleBody()
+    }
+
+    private fun refreshVisibleBody() {
+        val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        body.text = reminderBodyForLockState(reminderTitle, locked)
+    }
 }
+
+internal fun reminderBodyForLockState(title: String, deviceLocked: Boolean): String =
+    if (deviceLocked) "解锁后查看事项" else title

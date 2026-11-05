@@ -1,5 +1,6 @@
 package com.voicetodo.alarm
 
+import android.Manifest
 import android.app.Notification
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
@@ -29,6 +30,7 @@ class AlarmDeliveryTest {
     @Test
     fun scheduledAlarmKeepsFullScreenAndDismissActionWhenServiceTakesOver() {
         val app = ApplicationProvider.getApplicationContext<VoiceTodoApp>()
+        shadowOf(app).grantPermissions(Manifest.permission.USE_FULL_SCREEN_INTENT)
         val at = Instant.now().plusSeconds(3600)
         val item = runBlocking { app.useCases.confirmDraft("旧标题", at).item }
         runBlocking { app.useCases.updateItem(item.id, TodoEdit("锁屏提醒新标题", null, null, at)) }
@@ -43,6 +45,11 @@ class AlarmDeliveryTest {
             val notification = shadowOf(controller.get()).lastForegroundNotification
             assertNotNull("前台通知不能丢失锁屏全屏入口", notification.fullScreenIntent)
             assertEquals(Notification.CATEGORY_ALARM, notification.category)
+            assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+            assertEquals(
+                "解锁后查看事项",
+                notification.publicVersion.extras.getString(Notification.EXTRA_TEXT),
+            )
             assertEquals(listOf("完成", "延后", "关闭"), notification.actions.map { it.title.toString() })
             assertEquals("锁屏提醒新标题", notification.extras.getString(Notification.EXTRA_TEXT))
             assertNotNull(runBlocking { app.repository.deliveredAt(item.id, item.reminderRevision) })
@@ -59,6 +66,11 @@ class AlarmDeliveryTest {
             controller.destroy()
             runBlocking { app.useCases.deleteItem(item.id) }
         }
+    }
+
+    @Test fun lockScreenBodyHidesTitleUntilDeviceIsUnlocked() {
+        assertEquals("解锁后查看事项", reminderBodyForLockState("私人事项", deviceLocked = true))
+        assertEquals("私人事项", reminderBodyForLockState("私人事项", deviceLocked = false))
     }
 
     @Test fun serviceSecondCheckRejectsCompletedDeletedAndOldRevisionBeforeNotification() {

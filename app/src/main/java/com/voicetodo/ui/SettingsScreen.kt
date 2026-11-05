@@ -44,12 +44,20 @@ private enum class SettingsDestination {
     About,
 }
 
+enum class ReminderSettingsTarget {
+    NotificationChannel,
+    ExactAlarm,
+    FullScreen,
+    AppDetails,
+    Sound,
+}
+
 @Composable
 fun SettingsScreen(
     settingsVm: SettingsViewModel,
     todoVm: TodoViewModel,
     appVersion: String,
-    onOpenNotificationSettings: () -> Unit,
+    onOpenReminderSettings: (ReminderSettingsTarget) -> Unit,
 ) {
     val settingsState by settingsVm.state.collectAsStateWithLifecycle()
     val todoState by todoVm.state.collectAsStateWithLifecycle()
@@ -82,7 +90,9 @@ fun SettingsScreen(
             onFontSizeChange = settingsVm::setFontSize,
             onFocusSettingsChange = settingsVm::updateFocusSettings,
             onOpenVoiceAi = todoVm::onOpenAiSettings,
-            onOpenNotificationSettings = onOpenNotificationSettings,
+            onOpenNotificationSettings = {
+                onOpenReminderSettings(ReminderSettingsTarget.NotificationChannel)
+            },
             onOpenPermissions = { destination = SettingsDestination.Permissions },
             onOpenData = { destination = SettingsDestination.Data },
             onOpenTrash = { destination = SettingsDestination.Trash },
@@ -90,6 +100,7 @@ fun SettingsScreen(
         )
         SettingsDestination.Permissions -> PermissionsGuidanceScreen(
             capabilities = settingsState.capabilities,
+            onOpenSettings = onOpenReminderSettings,
             onBack = { destination = SettingsDestination.Root },
         )
         SettingsDestination.Data -> PendingFeatureScreen(
@@ -386,8 +397,9 @@ private fun NumberStepper(
 }
 
 @Composable
-private fun PermissionsGuidanceScreen(
+internal fun PermissionsGuidanceScreen(
     capabilities: ReminderCapabilities?,
+    onOpenSettings: (ReminderSettingsTarget) -> Unit,
     onBack: () -> Unit,
 ) {
     LazyColumn(
@@ -397,25 +409,127 @@ private fun PermissionsGuidanceScreen(
         item {
             Text("权限与提醒检查", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "这里展示应用当前读取到的系统能力。通知频道、全屏权限与声音条件由 #10 继续补齐。",
+                if (capabilities == null) {
+                    "暂时无法读取系统能力；可以返回后重试，事项数据不会受影响。"
+                } else {
+                    "系统 API ${capabilities.apiLevel}，" +
+                        "应用 target SDK ${capabilities.targetSdk}。返回应用后会重新读取真实状态。"
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    PermissionLine("精确闹钟", capabilities?.canScheduleExactAlarm)
-                    PermissionLine("通知", capabilities?.canPostNotifications)
-                    PermissionLine("麦克风", capabilities?.canRecordAudio)
-                }
+            SettingsSection("提醒链路", "reminder_readiness") {
+                CapabilityLine("事项保存", "可用", true, "保存成功不代表已经排入系统。")
+                CapabilityLine(
+                    "系统调度",
+                    readyText(capabilities?.canScheduleExactAlarm),
+                    capabilities?.canScheduleExactAlarm,
+                    "只有这里就绪，未来提醒才会登记为系统精确闹钟。",
+                )
+                CapabilityLine(
+                    "通知可见条件",
+                    readyText(capabilities?.notificationConditionsReady),
+                    capabilities?.notificationConditionsReady,
+                    "这里只表示权限、应用开关和频道均允许；实际到点展示仍需设备验证。",
+                )
+            }
+        }
+        item {
+            SettingsSection("系统权限与开关", "reminder_permissions") {
+                CapabilityLine(
+                    "通知运行时权限",
+                    when {
+                        capabilities == null -> "无法读取"
+                        !capabilities.notificationPermissionRequired -> "此版本无需单独授权"
+                        capabilities.notificationPermissionGranted -> "已授权"
+                        else -> "未授权"
+                    },
+                    capabilities?.notificationPermissionGranted,
+                    "Android 13 起需要授权；撤回后提醒仍保存，但通知不可见。",
+                    "打开应用设置",
+                ) { onOpenSettings(ReminderSettingsTarget.AppDetails) }
+                CapabilityLine(
+                    "应用通知总开关",
+                    readyText(capabilities?.appNotificationsEnabled),
+                    capabilities?.appNotificationsEnabled,
+                    "系统可在应用级别关闭全部通知。",
+                    "打开通知设置",
+                ) { onOpenSettings(ReminderSettingsTarget.NotificationChannel) }
+                CapabilityLine(
+                    "提醒通知频道",
+                    readyText(capabilities?.reminderChannelEnabled),
+                    capabilities?.reminderChannelEnabled,
+                    "频道关闭时不会出现提醒通知。",
+                    "打开频道设置",
+                ) { onOpenSettings(ReminderSettingsTarget.NotificationChannel) }
+                CapabilityLine(
+                    "精确闹钟",
+                    when {
+                        capabilities == null -> "无法读取"
+                        !capabilities.exactAlarmAccessRequired -> "此版本无需特殊访问"
+                        capabilities.canScheduleExactAlarm -> "已允许"
+                        else -> "未允许"
+                    },
+                    capabilities?.canScheduleExactAlarm,
+                    "未允许时事项照常保存，但提醒标记为未就绪。",
+                    if (capabilities?.exactAlarmAccessRequired == true) "打开精确闹钟设置" else null,
+                ) { onOpenSettings(ReminderSettingsTarget.ExactAlarm) }
+                CapabilityLine(
+                    "麦克风",
+                    readyText(capabilities?.canRecordAudio),
+                    capabilities?.canRecordAudio,
+                    "只影响离线语音输入，不影响手动创建事项。",
+                    "打开应用设置",
+                ) { onOpenSettings(ReminderSettingsTarget.AppDetails) }
+            }
+        }
+        item {
+            SettingsSection("锁屏与声音", "reminder_presentation") {
+                CapabilityLine(
+                    "全屏提醒入口",
+                    when {
+                        capabilities == null -> "无法读取"
+                        capabilities.canUseFullScreenIntent -> "可用"
+                        else -> "受系统限制"
+                    },
+                    capabilities?.canUseFullScreenIntent,
+                    if (capabilities?.canUseFullScreenIntent == false) {
+                        "到点仍保留系统允许的通知与响铃；点通知可进入提醒界面。"
+                    } else {
+                        "锁屏正文默认隐藏，解锁后才显示事项内容。"
+                    },
+                    if (capabilities?.fullScreenAccessManaged == true) "打开全屏提醒设置" else null,
+                ) { onOpenSettings(ReminderSettingsTarget.FullScreen) }
+                CapabilityLine(
+                    "通知频道声音",
+                    readyText(capabilities?.reminderChannelSoundEnabled),
+                    capabilities?.reminderChannelSoundEnabled,
+                    "应用不会擅自修改频道声音。",
+                    "打开频道设置",
+                ) { onOpenSettings(ReminderSettingsTarget.NotificationChannel) }
+                CapabilityLine(
+                    "闹钟音量",
+                    readyText(capabilities?.alarmVolumeAudible),
+                    capabilities?.alarmVolumeAudible,
+                    "音量为零时可能无声；应用不会擅自提高音量。",
+                    "打开声音设置",
+                ) { onOpenSettings(ReminderSettingsTarget.Sound) }
+                CapabilityLine(
+                    "勿扰模式",
+                    when (capabilities?.doNotDisturbActive) {
+                        true -> "已开启，遵循系统规则"
+                        false -> "未开启"
+                        null -> "无法读取"
+                    },
+                    capabilities?.doNotDisturbActive?.not(),
+                    "应用不会绕过或擅自修改勿扰设置。",
+                )
             }
         }
         item {
             Text(
-                "保存事项成功、系统调度成功和通知实际可见是三种不同状态；当前页面不把它们混在一起。",
+                "事项保存、系统调度、通知可见和实际发声是不同状态，本页分别展示，不用单一“成功”代替。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(onClick = onBack, modifier = Modifier.testTag("permissions_back")) {
@@ -426,25 +540,39 @@ private fun PermissionsGuidanceScreen(
 }
 
 @Composable
-private fun PermissionLine(label: String, granted: Boolean?) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label)
-        Text(
-            when (granted) {
-                true -> "已具备"
-                false -> "未具备"
-                null -> "无法读取"
-            },
-            color = when (granted) {
-                true -> MaterialTheme.colorScheme.primary
-                false -> MaterialTheme.colorScheme.error
-                null -> MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
+private fun CapabilityLine(
+    label: String,
+    status: String,
+    ready: Boolean?,
+    detail: String,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, fontWeight = FontWeight.Medium)
+            Text(
+                status,
+                color = when (ready) {
+                    true -> MaterialTheme.colorScheme.primary
+                    false -> MaterialTheme.colorScheme.error
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+        Text(detail, style = MaterialTheme.typography.bodySmall)
+        actionLabel?.let {
+            TextButton(onClick = onAction, modifier = Modifier.testTag("capability_action_${label}")) {
+                Text(it)
+            }
+        }
     }
+}
+
+private fun readyText(ready: Boolean?): String = when (ready) {
+    true -> "已具备"
+    false -> "未具备"
+    null -> "无法读取"
 }
 
 @Composable
@@ -518,7 +646,8 @@ internal fun capabilitySummary(capabilities: ReminderCapabilities?): String {
     if (capabilities == null) return "无法读取系统权限状态"
     return listOf(
         if (capabilities.canScheduleExactAlarm) "精确闹钟已具备" else "精确闹钟未具备",
-        if (capabilities.canPostNotifications) "通知已具备" else "通知未具备",
+        if (capabilities.notificationConditionsReady) "通知条件已具备" else "通知条件未具备",
+        if (capabilities.canUseFullScreenIntent) "全屏入口可用" else "全屏入口受限",
         if (capabilities.canRecordAudio) "麦克风已具备" else "麦克风未具备",
     ).joinToString(" · ")
 }

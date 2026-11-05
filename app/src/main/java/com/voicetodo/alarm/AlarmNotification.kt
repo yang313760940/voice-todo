@@ -44,7 +44,14 @@ internal object AlarmNotification {
             it.putExtra(AlarmActionReceiver.EXTRA_SNOOZE_MINUTES, AlarmActionReceiver.SNOOZE_DEFAULT_MINUTES)
         }
         val dismissPi = broadcastAction(AlarmActionReceiver.ACTION_DISMISS, "dismiss", 0x080000)
-        return NotificationCompat.Builder(context, VoiceTodoApp.CHANNEL_REMINDER)
+        val publicNotification = NotificationCompat.Builder(context, VoiceTodoApp.CHANNEL_REMINDER)
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("语音提醒")
+            .setContentText("解锁后查看事项")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(ringPi)
+            .build()
+        val builder = NotificationCompat.Builder(context, VoiceTodoApp.CHANNEL_REMINDER)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("语音提醒")
             .setContentText(title)
@@ -55,10 +62,14 @@ internal object AlarmNotification {
             .setOnlyAlertOnce(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(ringPi)
-            .setFullScreenIntent(ringPi, true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicNotification)
             .addAction(0, "完成", completePi)
             .addAction(0, "延后", snoozePi)
             .addAction(0, "关闭", dismissPi)
-            .build()
+        if (readReminderCapabilities(context).canUseFullScreenIntent) {
+            builder.setFullScreenIntent(ringPi, true)
+        }
+        return builder.build()
     }
 }

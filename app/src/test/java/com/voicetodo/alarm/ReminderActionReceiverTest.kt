@@ -1,5 +1,6 @@
 package com.voicetodo.alarm
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationManager
@@ -18,6 +19,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlarmManager
 
@@ -31,6 +33,7 @@ class ReminderActionReceiverTest {
 
     @Before fun setUp() {
         app = ApplicationProvider.getApplicationContext()
+        shadowOf(app).grantPermissions(Manifest.permission.USE_FULL_SCREEN_INTENT)
         nm = app.getSystemService(NotificationManager::class.java)
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
     }

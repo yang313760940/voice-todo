@@ -1,5 +1,6 @@
 package com.voicetodo.domain
 
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -47,6 +48,37 @@ data class UpdateResult(
     val outcome: ReminderOutcome?,
 )
 
+/** 通知入口“延后提醒”的预设时长。 */
+enum class SnoozeOption(val minutes: Long) {
+    TenMinutes(10),
+    ThirtyMinutes(30),
+    OneHour(60);
+
+    companion object {
+        /** 未知分钟数回退到 10 分钟，供通知/界面共用，避免各处重复解析。 */
+        fun fromMinutes(minutes: Long): SnoozeOption =
+            entries.firstOrNull { it.minutes == minutes } ?: TenMinutes
+    }
+}
+
+/**
+ * 通知入口的处理结果，供全屏提醒界面/通知动作与测试统一断言。
+ *
+ * 完成：标记事项完成并取消本实例未来提醒（重复实例仍保留后续安排）。
+ * 延后：只在 [until] 重新登记一条系统闹钟，不改变截止时间、提醒列表或下一周期。
+ * 关闭：只结束本次提醒，不完成事项，也不影响后续重复实例。
+ */
+data class ReminderActionOutcome(
+    val item: TodoItem,
+    val action: ReminderAction,
+    val snoozeUntil: Instant? = null,
+    val outcome: ReminderOutcome = ReminderOutcome.NotRequested,
+    /** 重复点击同一动作返回 true：不重复调度，也不再次改写事项。 */
+    val ignored: Boolean = false,
+)
+
+enum class ReminderAction { Complete, Snooze, Dismiss }
+
 /**
  * 统一用例入口（应用层 seam）。界面通过它读取列表和提交用户操作；
  * 失败（空标题、过去时刻）抛 [IllegalArgumentException]，调用方在保存前拦截。
@@ -83,7 +115,8 @@ class TodoUseCases(
         for (item in repo.incomplete().filter { it.recurrence == null }) {
             if (item.reminders.isNotEmpty()) {
                 val pending = item.reminders.map { reminder ->
-                    if (reminder.at.isAfter(now) && repo.deliveredAt(item.id, reminder.id, reminder.revision) == null)
+                    if (reminder.at.isAfter(now) && reminder.outcome != ReminderOutcome.NotRequested &&
+                        repo.deliveredAt(item.id, reminder.id, reminder.revision) == null)
                         reminder.copy(outcome = ReminderOutcome.NotReady) else reminder
                 }
                 scheduleMultiple(item.copy(reminders = pending))
@@ -402,6 +435,109 @@ class TodoUseCases(
         completed
     }
 
+    /**
+     * 通知/响铃界面的“完成”：完成事项并撤销本实例未来提醒。
+     * 重复实例完成本次不结束后续安排；[reminderId]/[revision] 标识被触发的这一次提醒，
+     * 与当前提醒不符（已被处理过）时返回 ignored，不重复调度。
+     */
+    suspend fun completeFromReminder(
+        itemId: String, reminderId: String = itemId, revision: Long = ANY_REVISION,
+    ): ReminderActionOutcome = mutations.withLock {
+        val item = repo.findById(itemId) ?: throw IllegalArgumentException("事项不存在")
+        if (item.completedAt != null || !isFiring(item, reminderId, revision)) {
+            if (item.completedAt != null) scheduler.cancel(itemId)
+            return@withLock ReminderActionOutcome(item, ReminderAction.Complete, ignored = true)
+        }
+        val now = clock.now()
+        val completed = item.copy(
+            completedAt = now,
+            reminderRevision = item.reminderRevision + 1,
+            reminders = item.reminders.map { it.copy(outcome = ReminderOutcome.NotRequested) },
+        )
+        repo.save(completed)
+        scheduler.cancel(itemId)
+        item.seriesId?.let { ensureSeriesFor(it, now) }
+        ReminderActionOutcome(completed, ReminderAction.Complete, outcome = ReminderOutcome.NotRequested)
+    }
+
+    /** 10 分钟 / 30 分钟 / 1 小时；只在指定时刻重新登记系统闹钟。 */
+    suspend fun snoozeFromReminder(
+        itemId: String, option: SnoozeOption, reminderId: String = itemId, revision: Long = ANY_REVISION,
+    ): ReminderActionOutcome =
+        snoozeFromReminderAt(itemId, clock.now().plus(Duration.ofMinutes(option.minutes)), reminderId, revision)
+
+    /**
+     * 自选时刻延后：只为被触发的这一次提醒重新登记系统闹钟（新修订号，可正常投递），
+     * 不改变截止时间、其它提醒或下一重复周期。
+     */
+    suspend fun snoozeFromReminderAt(
+        itemId: String, until: Instant, reminderId: String = itemId, revision: Long = ANY_REVISION,
+    ): ReminderActionOutcome = mutations.withLock {
+        val item = repo.findById(itemId) ?: throw IllegalArgumentException("事项不存在")
+        require(item.completedAt == null) { "已完成事项不能再延后" }
+        if (!isFiring(item, reminderId, revision)) {
+            return@withLock ReminderActionOutcome(item, ReminderAction.Snooze, ignored = true)
+        }
+        require(until.isAfter(clock.now())) { "延后时间必须晚于当前时间" }
+        val newRevision = item.reminderRevision + 1
+        val scheduled = scheduler.scheduleReminder(itemId, item.title, reminderId, until, newRevision)
+        val outcome = if (scheduled) ReminderOutcome.Scheduled else ReminderOutcome.NotReady
+        val nextReminders = if (item.reminders.isEmpty()) {
+            listOf(TodoReminder(reminderId, until, revision = newRevision, outcome = outcome))
+        } else item.reminders.map {
+            if (it.id == reminderId) TodoReminder(it.id, until, beforeDue = it.beforeDue,
+                revision = newRevision, outcome = outcome, deliveredAt = null) else it
+        }
+        val updated = item.copy(
+            dismissedAt = clock.now(),
+            remindAt = nextReminders.map { it.at }.minOrNull(),
+            reminderRevision = newRevision,
+            reminders = nextReminders,
+        )
+        repo.save(updated)
+        ReminderActionOutcome(updated, ReminderAction.Snooze, snoozeUntil = until, outcome = outcome)
+    }
+
+    /** 关闭本次提醒：不完成事项、不改截止与其它提醒，只让被触发的这一次提醒失效。 */
+    suspend fun dismissReminder(
+        itemId: String, reminderId: String = itemId, revision: Long = ANY_REVISION,
+    ): ReminderActionOutcome = mutations.withLock {
+        val item = repo.findById(itemId) ?: throw IllegalArgumentException("事项不存在")
+        if (item.completedAt != null || !isFiring(item, reminderId, revision)) {
+            return@withLock ReminderActionOutcome(
+                item, ReminderAction.Dismiss,
+                outcome = ReminderOutcome.NotRequested, ignored = true,
+            )
+        }
+        val newRevision = item.reminderRevision + 1
+        val nextReminders = if (item.reminders.isEmpty()) {
+            listOf(TodoReminder(reminderId, item.remindAt ?: clock.now(),
+                revision = newRevision, outcome = ReminderOutcome.NotRequested))
+        } else item.reminders.map {
+            if (it.id == reminderId) it.copy(revision = newRevision, outcome = ReminderOutcome.NotRequested)
+            else it
+        }
+        val updated = item.copy(
+            dismissedAt = clock.now(),
+            reminderRevision = newRevision,
+            reminders = nextReminders,
+        )
+        repo.save(updated)
+        scheduler.cancelReminder(itemId, reminderId)
+        ReminderActionOutcome(updated, ReminderAction.Dismiss, outcome = ReminderOutcome.NotRequested)
+    }
+
+    /** 被触发的这次提醒是否仍是当前提醒；[revision] 为哨兵时表示不校验（界面便捷调用）。 */
+    private fun isFiring(item: TodoItem, reminderId: String, revision: Long): Boolean =
+        revision == ANY_REVISION || item.findReminder(reminderId)?.revision == revision
+
+    /** 设置某实例是否使用持续响铃通知；默认提示音振动与之都只是呈现方式。 */
+    suspend fun setPersistentRing(id: String, persistent: Boolean): TodoItem = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        if (item.persistentRing == persistent) return@withLock item
+        item.copy(persistentRing = persistent).also { repo.save(it) }
+    }
+
     suspend fun restoreItem(id: String): RestoreResult = mutations.withLock {
         val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
         if (item.completedAt == null) {
@@ -522,6 +658,7 @@ class TodoUseCases(
                     seriesId = series.id,
                     occurrenceDate = date,
                     listId = series.listId,
+                    persistentRing = series.persistentRing,
                 )
                 repo.save(occurrence)
                 val (_, createdOutcome) = scheduleMultiple(occurrence)
@@ -554,5 +691,7 @@ class TodoUseCases(
 
     private companion object {
         const val FUTURE_INSTANCES = 2
+        /** 不校验触发修订号的哨兵值，用于没有具体投递上下文的便捷调用。 */
+        const val ANY_REVISION = Long.MIN_VALUE
     }
 }

@@ -96,9 +96,15 @@ class RoomTodoRepository(
             if (!publish(item)) return@withTransaction false
             val deliveredAt = now()
             dao.delivered(ReminderDeliveryEntity(itemId, reminderId, revision, deliveredAt))
-            if (item.reminders.isNotEmpty()) dao.save(TodoEntity.from(item.copy(reminders = item.reminders.map {
-                if (it.id == reminderId) it.copy(deliveredAt = deliveredAt) else it
-            })))
+            val nextReminders = if (item.reminders.isNotEmpty()) {
+                item.reminders.map {
+                    if (it.id == reminderId) it.copy(deliveredAt = deliveredAt) else it
+                }
+            } else {
+                item.reminders
+            }
+            // 本次提醒已投递：清除“已延后/已关闭”的展示标记，并记录该提醒的投递时刻。
+            dao.save(TodoEntity.from(item.copy(dismissedAt = null, reminders = nextReminders)))
             true
         }
     }

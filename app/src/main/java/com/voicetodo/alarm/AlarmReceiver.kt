@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.domain.TodoItem
+import com.voicetodo.domain.findReminder
 import com.voicetodo.domain.isCurrentReminder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,9 +83,10 @@ class AlarmReceiver : BroadcastReceiver() {
             item: TodoItem,
             reminderId: String = item.id,
         ): Boolean = try {
+            val revision = item.findReminder(reminderId)?.revision ?: item.reminderRevision
             context.getSystemService(NotificationManager::class.java).notify(
                 notificationIdFor(item.id, reminderId),
-                AlarmNotification.build(context, item.id, item.title, reminderId))
+                AlarmNotification.build(context, item.id, item.title, reminderId, revision))
             true
         } catch (e: Exception) {
             android.util.Log.w(TAG, "提醒通知不可用", e)

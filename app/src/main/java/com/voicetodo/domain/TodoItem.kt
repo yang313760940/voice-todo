@@ -40,6 +40,13 @@ data class TodoItem(
     val occurrenceDate: LocalDate? = null,
     /** 重复模板的规则；实例自身为空，避免每次实例重复保存规则。 */
     val recurrence: RecurrenceRule? = null,
+    /** 用户选择默认在通知入口完成、延后或关闭本次提醒时，该实例是否使用持续响铃通知；不影响事项本身。 */
+    val persistentRing: Boolean = false,
+    /**
+     * 本次提醒被“关闭”或被“延后”取代后记下的已处理时刻，使旧闹钟投递失效。
+     * 完成事项不改它；它与提醒修订号、提醒时刻一起判定当前提醒是否仍有效。
+     */
+    val dismissedAt: Instant? = null,
 )
 
 /** 逾期只由截止时间、完成状态和调用方提供的当前时刻决定。 */

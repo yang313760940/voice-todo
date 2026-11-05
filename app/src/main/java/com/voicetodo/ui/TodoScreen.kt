@@ -651,8 +651,27 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
                     style = MaterialTheme.typography.bodySmall)
             }
         }
+        if (original != null) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().testTag("persistent_ring_row")) {
+                    Column(Modifier.weight(1f)) {
+                        Text("持续响铃", fontWeight = FontWeight.Medium)
+                        Text("默认关闭：普通提示音与振动。开启后持续响铃 60 秒并保留通知，手动关闭立即停止。",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = original.persistentRing,
+                        onCheckedChange = { vm.onSetPersistentRing(original.id, it) },
+                        enabled = enabled && original.completedAt == null,
+                        modifier = Modifier.testTag("persistent_ring_switch"),
+                    )
+                }
+            }
+        }
         item {
             original?.let { ItemStatus(it, state) }
+            original?.let { ReminderResolutionText(it, state.now, vm.zoneId) }
             Message(state.message)
         }
         item {
@@ -841,6 +860,29 @@ private fun ItemStatus(item: TodoItem, state: UiState) {
         if (item.isOverdue(state.now)) Text("逾期", color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("overdue_${item.id}"), style = MaterialTheme.typography.labelMedium)
         if (item.completedAt != null) Text("已完成", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/**
+ * 详情页显示上次通知处理的结果：完成、已关闭本次提醒、或已延后到新的时刻。
+ * 结果来自持久化事项状态（dismissedAt / completedAt / reminders），重开应用仍可见。
+ */
+@Composable
+private fun ReminderResolutionText(item: TodoItem, now: java.time.Instant, zone: ZoneId) {
+    // 仅“已延后/已关闭”需要额外说明；完成状态由 ItemStatus 展示。
+    val snoozedTo = item.reminders
+        .filter { it.outcome == ReminderOutcome.Scheduled && it.deliveredAt == null && it.at.isAfter(now) }
+        .map { it.at }.minOrNull()
+    val text = when {
+        item.completedAt != null -> null
+        item.dismissedAt != null && snoozedTo != null ->
+            "本次提醒已延后，已重新安排至 ${snoozedTo.atZone(zone).format(timeFmt)}"
+        item.dismissedAt != null -> "本次提醒已关闭，事项未完成"
+        else -> null
+    }
+    text?.let {
+        Text(it, style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.testTag("reminder_resolution_${item.id}"))
     }
 }
 

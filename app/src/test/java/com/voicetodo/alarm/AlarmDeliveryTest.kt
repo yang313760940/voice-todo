@@ -43,13 +43,13 @@ class AlarmDeliveryTest {
             val notification = shadowOf(controller.get()).lastForegroundNotification
             assertNotNull("前台通知不能丢失锁屏全屏入口", notification.fullScreenIntent)
             assertEquals(Notification.CATEGORY_ALARM, notification.category)
-            assertEquals("关闭提醒", notification.actions.single().title)
+            assertEquals(listOf("完成", "延后", "关闭"), notification.actions.map { it.title.toString() })
             assertEquals("锁屏提醒新标题", notification.extras.getString(Notification.EXTRA_TEXT))
             assertNotNull(runBlocking { app.repository.deliveredAt(item.id, item.reminderRevision) })
             controller.startCommand(0, 2)
             shadowOf(android.os.Looper.getMainLooper()).idle()
             assertEquals(notification, shadowOf(controller.get()).lastForegroundNotification)
-            notification.actions.single().actionIntent.send()
+            notification.actions.last().actionIntent.send()
             shadowOf(android.os.Looper.getMainLooper()).idle()
             val stoppedService = shadowOf(app).nextStoppedService
             assertEquals(RingingService::class.java.name, stoppedService.component!!.className)

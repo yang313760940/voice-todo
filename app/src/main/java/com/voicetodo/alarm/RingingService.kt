@@ -42,7 +42,7 @@ class RingingService : Service() {
                 ) { item ->
                     withContext(Dispatchers.Main.immediate) {
                         val notification = AlarmNotification.build(
-                            this@RingingService, item.id, item.title, token.reminderId)
+                            this@RingingService, item.id, item.title, token.reminderId, token.revision)
                         val notificationId = AlarmReceiver.notificationIdFor(item.id, token.reminderId)
                         try {
                             if (foregroundNotificationId == null) {
@@ -58,11 +58,13 @@ class RingingService : Service() {
                             }
                             publishedByService = true
                             activeReminderKeys += token.itemId to token.reminderId
-                            startRinging()
-                            stopRunnable?.let { handler.removeCallbacks(it) }
-                            val r = Runnable { stopSoundOnly() }
-                            stopRunnable = r
-                            handler.postDelayed(r, DEFAULT_RING_MILLIS)
+                            startRinging(item.persistentRing)
+                            if (item.persistentRing) {
+                                stopRunnable?.let { handler.removeCallbacks(it) }
+                                val r = Runnable { stopSoundOnly() }
+                                stopRunnable = r
+                                handler.postDelayed(r, DEFAULT_RING_MILLIS)
+                            }
                             true
                         } catch (e: Exception) {
                             android.util.Log.w("RingingService", "startForeground failed", e)
@@ -83,7 +85,11 @@ class RingingService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startRinging() {
+    /**
+     * 持续响铃时循环播放并在 [DEFAULT_RING_MILLIS] 后停止；普通提醒只播放一次默认提示音，
+     * 由系统通知负责后续提示，不长期占用音频。
+     */
+    private fun startRinging(persistent: Boolean) {
         player?.release()
         player = null
         try {
@@ -97,7 +103,7 @@ class RingingService : Service() {
                         .build()
                 )
                 setDataSource(this@RingingService, uri)
-                isLooping = true
+                isLooping = persistent
                 prepare()
                 start()
             }

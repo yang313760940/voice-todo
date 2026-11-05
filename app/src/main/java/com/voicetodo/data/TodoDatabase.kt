@@ -50,6 +50,10 @@ data class TodoEntity(
     val recurrenceRule: String? = null,
     val seriesId: String? = null,
     val occurrenceDate: LocalDate? = null,
+    /** 该实例是否使用持续响铃通知；只影响提醒呈现，不影响事项本身。 */
+    @ColumnInfo(defaultValue = "0") val persistentRing: Boolean = false,
+    /** 本次提醒被关闭/延后后的已处理时刻，使旧投递失效。 */
+    val dismissedAt: Instant? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -67,6 +71,8 @@ data class TodoEntity(
         seriesId = seriesId,
         occurrenceDate = occurrenceDate,
         recurrence = RecurrenceCodec.decode(recurrenceRule),
+        persistentRing = persistentRing,
+        dismissedAt = dismissedAt,
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -85,6 +91,8 @@ data class TodoEntity(
             recurrenceRule = item.recurrence?.let(RecurrenceCodec::encode),
             seriesId = item.seriesId,
             occurrenceDate = item.occurrenceDate,
+            persistentRing = item.persistentRing,
+            dismissedAt = item.dismissedAt,
         )
     }
 }
@@ -195,12 +203,13 @@ interface TodoDao {
         FocusSettingsEntity::class,
         TodoListEntity::class,
     ],
-    version = 7,
+    version = 8,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 6, to = 7),
+        AutoMigration(from = 7, to = 8),
     ],
     exportSchema = true,
 )

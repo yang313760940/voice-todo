@@ -911,6 +911,16 @@ class TodoViewModel @JvmOverloads constructor(
         reload()
     }
 
+    /** 详情页选择通知呈现方式：普通提示音振动（默认）或持续响铃 60 秒。 */
+    fun onSetPersistentRing(id: String, enabled: Boolean) = action {
+        useCases.setPersistentRing(id, enabled)
+        _state.value = _state.value.copy(
+            message = if (enabled) "已改为持续响铃（默认 60 秒后停止并保留通知）" else "已改为普通提示音与振动",
+        )
+        reload()
+    }
+
+
     private fun recurrenceRule(detail: DetailDraft): RecurrenceRule {
         val frequency = when (detail.repeat) {
             RepeatDraft.Daily -> RecurrenceFrequency.Daily

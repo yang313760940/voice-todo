@@ -75,7 +75,7 @@ try {
         'RingingService:V', 'ActivityManager:I', 'ActivityTaskManager:I', 'MediaPlayer:V', '*:S') | Out-Null
     if ($services -notmatch 'isForeground=true') { throw 'No ringing foreground service' }
     if ($notifications -notmatch 'pkg=com.voicetodo.app') { throw 'No reminder notification' }
-    $uid = [regex]::Match($state, 'userId=(\d+)').Groups[1].Value
+    $uid = [regex]::Match($state, '(?:userId|appId)=(\d+)').Groups[1].Value
     if (-not $uid) { throw 'Cannot identify app UID' }
     if ($audio -notmatch "u/pid:$uid/[^\r\n]*state:started[^\r\n]*usage=USAGE_ALARM") { throw 'No playing alarm audio' }
     if ($activities -notmatch '(mResumedActivity|topResumedActivity)[^\r\n]*com.voicetodo.alarm.AlarmRingActivity') {

@@ -604,6 +604,20 @@ class TodoUseCases(
         item.copy(persistentRing = persistent).also { repo.save(it) }
     }
 
+    /** 开启/关闭到点朗读；锁屏选项独立保留，关闭朗读不会重置它。 */
+    suspend fun setReadAloud(id: String, enabled: Boolean): TodoItem = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        if (item.readAloud == enabled) return@withLock item
+        item.copy(readAloud = enabled).also { repo.save(it) }
+    }
+
+    /** 设置锁屏时是否朗读正文；默认关闭，只有用户明确开启才生效。 */
+    suspend fun setReadAloudWhenLocked(id: String, enabled: Boolean): TodoItem = mutations.withLock {
+        val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
+        if (item.readAloudWhenLocked == enabled) return@withLock item
+        item.copy(readAloudWhenLocked = enabled).also { repo.save(it) }
+    }
+
     suspend fun restoreItem(id: String): RestoreResult = mutations.withLock {
         val item = repo.findById(id) ?: throw IllegalArgumentException("事项不存在")
         if (item.completedAt == null) {
@@ -725,6 +739,8 @@ class TodoUseCases(
                     occurrenceDate = date,
                     listId = series.listId,
                     persistentRing = series.persistentRing,
+                    readAloud = series.readAloud,
+                    readAloudWhenLocked = series.readAloudWhenLocked,
                 )
                 repo.save(occurrence)
                 val (_, createdOutcome) = scheduleMultiple(occurrence)

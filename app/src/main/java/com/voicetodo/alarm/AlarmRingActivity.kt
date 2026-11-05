@@ -45,6 +45,14 @@ class AlarmRingActivity : Activity() {
         }
         refreshVisibleBody()
         root.addView(body)
+        intent.getStringExtra(SystemReminderScheduler.EXTRA_SPEECH_NOTICE)?.takeIf { it.isNotBlank() }
+            ?.let { notice ->
+                root.addView(TextView(this).apply {
+                    text = notice
+                    textSize = 16f
+                    setPadding(0, 0, 0, padding)
+                })
+            }
         val result = TextView(this).apply { textSize = 16f; setPadding(0, padding, 0, padding) }
         root.addView(result)
 

@@ -178,4 +178,71 @@ class RoomReminderUpgradeTest {
             db.close()
         }
     }
+
+    @Test fun versionEightItemsDefaultReadingOffWhenSpeechColumnsAreAdded() = runTest {
+        val file = temp.newFile("version-eight.db")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { old ->
+            old.execSQL(
+                "CREATE TABLE `todos` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `remindAt` TEXT, " +
+                    "`plannedDate` TEXT, `dueAt` TEXT, `completedAt` TEXT, `createdAt` TEXT NOT NULL, " +
+                    "`reminderRevision` INTEGER NOT NULL, `reminders` TEXT NOT NULL DEFAULT '[]', " +
+                    "`quadrant` TEXT NOT NULL DEFAULT 'NotImportantNotUrgent', `suggestedQuadrant` TEXT, " +
+                    "`listId` TEXT, `recurrenceRule` TEXT, `seriesId` TEXT, `occurrenceDate` TEXT, " +
+                    "`persistentRing` INTEGER NOT NULL DEFAULT 0, `dismissedAt` TEXT, PRIMARY KEY(`id`))",
+            )
+            old.execSQL("CREATE INDEX `index_todos_listId` ON `todos` (`listId`)")
+            old.execSQL(
+                "CREATE TABLE `deliveries` (`itemId` TEXT NOT NULL, `reminderRevision` INTEGER NOT NULL, " +
+                    "`deliveredAt` TEXT NOT NULL, PRIMARY KEY(`itemId`, `reminderRevision`))",
+            )
+            old.execSQL(
+                "CREATE TABLE `reminder_deliveries` (`itemId` TEXT NOT NULL, `reminderId` TEXT NOT NULL, " +
+                    "`revision` INTEGER NOT NULL, `deliveredAt` TEXT NOT NULL, " +
+                    "PRIMARY KEY(`itemId`, `reminderId`, `revision`), " +
+                    "FOREIGN KEY(`itemId`) REFERENCES `todos`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            )
+            old.execSQL("CREATE INDEX `index_reminder_deliveries_itemId` ON `reminder_deliveries` (`itemId`)")
+            old.execSQL("CREATE TABLE `storage_migrations` (`name` TEXT NOT NULL, PRIMARY KEY(`name`))")
+            old.execSQL(
+                "CREATE TABLE `focus_sessions` (`id` TEXT NOT NULL, `phase` TEXT NOT NULL, " +
+                    "`startedAt` TEXT NOT NULL, `endsAt` TEXT NOT NULL, `lastResumedAt` TEXT NOT NULL, " +
+                    "`durationSeconds` INTEGER NOT NULL, `pausedAt` TEXT, " +
+                    "`accumulatedFocusSeconds` INTEGER NOT NULL, `completedPomodoros` INTEGER NOT NULL, " +
+                    "`itemId` TEXT, `state` TEXT NOT NULL, `endedAt` TEXT, PRIMARY KEY(`id`))",
+            )
+            old.execSQL(
+                "CREATE TABLE `focus_settings` (`id` INTEGER NOT NULL, `focusMinutes` INTEGER NOT NULL, " +
+                    "`shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, " +
+                    "`longBreakEvery` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+            )
+            old.execSQL("INSERT INTO `focus_settings` VALUES (1, 25, 5, 15, 4)")
+            old.execSQL(
+                "CREATE TABLE `todo_lists` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                    "`createdAt` TEXT NOT NULL, PRIMARY KEY(`id`))",
+            )
+            old.execSQL(
+                "INSERT INTO todos (id, title, createdAt, reminderRevision, persistentRing) " +
+                    "VALUES ('v8', '升级前朗读事项', '2026-11-04T08:00:00.000000000Z', 3, 1)",
+            )
+            old.version = 8
+        }
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath)
+            .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
+            .build()
+        try {
+            val item = TodoUseCases(
+                RoomTodoRepository(db, FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai"))),
+                RecordedScheduler(),
+                FrozenClock(Instant.parse("2026-11-04T11:00:00Z")),
+            ).findItem("v8")
+
+            assertEquals("升级前朗读事项", item.title)
+            assertTrue(item.persistentRing)
+            assertFalse("升级后默认不朗读", item.readAloud)
+            assertFalse("升级后锁屏默认不朗读", item.readAloudWhenLocked)
+        } finally {
+            db.close()
+        }
+    }
 }

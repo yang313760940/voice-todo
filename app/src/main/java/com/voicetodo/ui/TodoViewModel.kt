@@ -946,11 +946,38 @@ class TodoViewModel @JvmOverloads constructor(
 
     /** 详情页选择通知呈现方式：普通提示音振动（默认）或持续响铃 60 秒。 */
     fun onSetPersistentRing(id: String, enabled: Boolean) = action {
-        useCases.setPersistentRing(id, enabled)
+        val updated = useCases.setPersistentRing(id, enabled)
+        updateDetailItem(id, updated)
         _state.value = _state.value.copy(
             message = if (enabled) "已改为持续响铃（默认 60 秒后停止并保留通知）" else "已改为普通提示音与振动",
         )
         reload()
+    }
+
+    /** 详情页开启/关闭到点朗读。 */
+    fun onSetReadAloud(id: String, enabled: Boolean) = action {
+        val updated = useCases.setReadAloud(id, enabled)
+        updateDetailItem(id, updated)
+        _state.value = _state.value.copy(
+            message = if (enabled) "已开启朗读；到点用本机语音播报标题" else "已关闭朗读",
+        )
+        reload()
+    }
+
+    /** 锁屏朗读必须由用户明确开启；关闭后锁屏只响提示音。 */
+    fun onSetReadAloudWhenLocked(id: String, enabled: Boolean) = action {
+        val updated = useCases.setReadAloudWhenLocked(id, enabled)
+        updateDetailItem(id, updated)
+        _state.value = _state.value.copy(
+            message = if (enabled) "已允许锁屏朗读事项正文" else "锁屏时只响提示音，不朗读正文",
+        )
+        reload()
+    }
+
+    private fun updateDetailItem(id: String, item: TodoItem) {
+        val detail = _state.value.detail ?: return
+        if (detail.original?.id != id) return
+        _state.value = _state.value.copy(detail = detail.copy(original = item))
     }
 
 

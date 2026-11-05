@@ -53,6 +53,8 @@ class FileTodoRepository(
                     suggestedQuadrant = o.optionalString("suggestedQuadrant")?.let {
                         runCatching { Quadrant.valueOf(it) }.getOrNull()
                     },
+                    readAloud = o.optBoolean("readAloud", false),
+                    readAloudWhenLocked = o.optBoolean("readAloudWhenLocked", false),
                 )
             }
             list
@@ -83,6 +85,8 @@ class FileTodoRepository(
                     put("reminderRevision", it.reminderRevision)
                     put("quadrant", it.quadrant.name)
                     it.suggestedQuadrant?.let { suggested -> put("suggestedQuadrant", suggested.name) }
+                    put("readAloud", it.readAloud)
+                    put("readAloudWhenLocked", it.readAloudWhenLocked)
                 }
             )
         }

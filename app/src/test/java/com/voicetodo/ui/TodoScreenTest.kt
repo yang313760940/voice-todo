@@ -128,6 +128,28 @@ class TodoScreenTest {
         waitFor { vm.state.value.detail == null && !vm.state.value.busy }
     }
 
+    @Test fun readAloudSwitchesPersistAndLockReadingIsAnExplicitChoice() {
+        val item = createUntimed("朗读事项")
+        open(item)
+
+        detailClick("read_aloud_switch")
+        waitFor { !vm.state.value.busy && runBlocking { repo.findById(item.id)!!.readAloud } }
+        compose.onNodeWithTag("detail_screen")
+            .performScrollToNode(hasTestTag("read_aloud_when_locked_row"))
+        compose.onNodeWithTag("read_aloud_when_locked_row").assertExists()
+        Assert.assertFalse(runBlocking { repo.findById(item.id)!!.readAloudWhenLocked })
+
+        detailClick("read_aloud_when_locked_switch")
+        waitFor { !vm.state.value.busy && runBlocking { repo.findById(item.id)!!.readAloudWhenLocked } }
+
+        detailClick("read_aloud_switch")
+        waitFor {
+            !vm.state.value.busy && runBlocking { repo.findById(item.id)!!.readAloud } == false
+        }
+        compose.onNodeWithTag("read_aloud_when_locked_row").assertDoesNotExist()
+        Assert.assertTrue("关闭朗读不重置锁屏选择", runBlocking { repo.findById(item.id)!!.readAloudWhenLocked })
+    }
+
     @Test fun editingIndependentFieldsSurvivesDetailReopeningAndViewModelRecreation() {
         val item = createUntimed()
         open(item)

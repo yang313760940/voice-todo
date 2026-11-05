@@ -167,4 +167,23 @@ class ReminderActionsTest {
         assertNull(updated.completedAt)
         assertFalse(useCases.setPersistentRing(item.id, false).persistentRing)
     }
+
+    @Test fun readAloudDefaultsOffAndLockScreenChoiceIsIndependent() = runTest {
+        val useCases = useCases()
+        val item = useCases.confirmDraft("朗读", at).item
+        assertFalse(item.readAloud)
+        assertFalse("锁屏默认不朗读正文", item.readAloudWhenLocked)
+
+        val reading = useCases.setReadAloud(item.id, true)
+        assertTrue(reading.readAloud)
+        assertFalse(reading.readAloudWhenLocked)
+
+        val lockedReading = useCases.setReadAloudWhenLocked(item.id, true)
+        assertTrue(lockedReading.readAloud)
+        assertTrue(lockedReading.readAloudWhenLocked)
+
+        val readingOff = useCases.setReadAloud(item.id, false)
+        assertFalse(readingOff.readAloud)
+        assertTrue("关闭朗读不重置锁屏选择", readingOff.readAloudWhenLocked)
+    }
 }

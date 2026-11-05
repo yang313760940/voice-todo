@@ -705,6 +705,40 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
         if (original != null) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().testTag("read_aloud_row")) {
+                    Column(Modifier.weight(1f)) {
+                        Text("朗读事项", fontWeight = FontWeight.Medium)
+                        Text("到点用本机语音播报标题；缺少本地语音资源时显示原因并改用提示音，断网也可用。",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(
+                        checked = original.readAloud,
+                        onCheckedChange = { vm.onSetReadAloud(original.id, it) },
+                        enabled = enabled && original.completedAt == null,
+                        modifier = Modifier.testTag("read_aloud_switch"),
+                    )
+                }
+            }
+            if (original.readAloud) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().testTag("read_aloud_when_locked_row")) {
+                        Column(Modifier.weight(1f)) {
+                            Text("锁屏朗读", fontWeight = FontWeight.Medium)
+                            Text("默认关闭：锁屏时只响提示音，不播报标题；仅在你明确允许后读出正文。",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(
+                            checked = original.readAloudWhenLocked,
+                            onCheckedChange = { vm.onSetReadAloudWhenLocked(original.id, it) },
+                            enabled = enabled && original.completedAt == null,
+                            modifier = Modifier.testTag("read_aloud_when_locked_switch"),
+                        )
+                    }
+                }
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().testTag("persistent_ring_row")) {
                     Column(Modifier.weight(1f)) {
                         Text("持续响铃", fontWeight = FontWeight.Medium)

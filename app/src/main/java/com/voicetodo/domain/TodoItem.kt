@@ -42,6 +42,10 @@ data class TodoItem(
     val recurrence: RecurrenceRule? = null,
     /** 用户选择默认在通知入口完成、延后或关闭本次提醒时，该实例是否使用持续响铃通知；不影响事项本身。 */
     val persistentRing: Boolean = false,
+    /** 到点是否用本机语音朗读标题；只影响提示呈现，不影响事项与提醒调度。 */
+    val readAloud: Boolean = false,
+    /** 锁屏时是否仍朗读标题；默认关闭，避免私人内容在锁屏状态被读出。 */
+    val readAloudWhenLocked: Boolean = false,
     /**
      * 本次提醒被“关闭”或被“延后”取代后记下的已处理时刻，使旧闹钟投递失效。
      * 完成事项不改它；它与提醒修订号、提醒时刻一起判定当前提醒是否仍有效。

@@ -13,6 +13,7 @@ internal object AlarmNotification {
     fun build(
         context: Context, itemId: String, title: String,
         reminderId: String = itemId, revision: Long = Long.MIN_VALUE,
+        speechNotice: String? = null,
     ): Notification {
         val base = SystemReminderScheduler.requestCodeFor(itemId, reminderId)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -24,6 +25,7 @@ internal object AlarmNotification {
             putExtra(SystemReminderScheduler.EXTRA_REMINDER_ID, reminderId)
             putExtra(SystemReminderScheduler.EXTRA_REVISION, revision)
             putExtra(SystemReminderScheduler.EXTRA_TITLE, title)
+            speechNotice?.let { putExtra(SystemReminderScheduler.EXTRA_SPEECH_NOTICE, it) }
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
         val ringPi = PendingIntent.getActivity(context, base + 0x040000, ringIntent, flags)
@@ -55,6 +57,7 @@ internal object AlarmNotification {
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("语音提醒")
             .setContentText(title)
+            .apply { speechNotice?.let { setSubText(it) } }
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setOngoing(true)

@@ -131,6 +131,8 @@ class SystemReminderScheduler(private val context: Context) : ReminderScheduler 
         const val EXTRA_AT_MILLIS = "extra_at_millis"
         const val EXTRA_REVISION = "extra_revision"
         const val EXTRA_REMINDER_ID = "extra_reminder_id"
+        /** 朗读不可用时的回退原因，供全屏提醒页展示。 */
+        const val EXTRA_SPEECH_NOTICE = "extra_speech_notice"
         private val registrationLock = Any()
 
         private fun alarmUri(itemId: String, reminderId: String): Uri =

@@ -77,6 +77,7 @@ class AlarmActionReceiver : BroadcastReceiver() {
          * 关闭动作把旧通知移除后，若已无剩余提醒则停止前台服务。
          */
         fun stopOngoingReminder(context: Context, itemId: String, reminderId: String) {
+            RingingService.stopReminderSpeech(itemId, reminderId)
             val nm = context.getSystemService(NotificationManager::class.java)
             nm.cancel(AlarmReceiver.notificationIdFor(itemId, reminderId))
             // 仅当同频道已无其它提醒通知时才停止前台服务，避免误停其它仍在响的提醒。

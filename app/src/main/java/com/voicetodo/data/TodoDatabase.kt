@@ -52,6 +52,10 @@ data class TodoEntity(
     val occurrenceDate: LocalDate? = null,
     /** 该实例是否使用持续响铃通知；只影响提醒呈现，不影响事项本身。 */
     @ColumnInfo(defaultValue = "0") val persistentRing: Boolean = false,
+    /** 到点是否朗读标题；只影响提醒呈现。 */
+    @ColumnInfo(defaultValue = "0") val readAloud: Boolean = false,
+    /** 锁屏时是否仍朗读标题；默认关闭以保护隐私。 */
+    @ColumnInfo(defaultValue = "0") val readAloudWhenLocked: Boolean = false,
     /** 本次提醒被关闭/延后后的已处理时刻，使旧投递失效。 */
     val dismissedAt: Instant? = null,
 ) {
@@ -72,6 +76,8 @@ data class TodoEntity(
         occurrenceDate = occurrenceDate,
         recurrence = RecurrenceCodec.decode(recurrenceRule),
         persistentRing = persistentRing,
+        readAloud = readAloud,
+        readAloudWhenLocked = readAloudWhenLocked,
         dismissedAt = dismissedAt,
     )
     companion object {
@@ -92,6 +98,8 @@ data class TodoEntity(
             seriesId = item.seriesId,
             occurrenceDate = item.occurrenceDate,
             persistentRing = item.persistentRing,
+            readAloud = item.readAloud,
+            readAloudWhenLocked = item.readAloudWhenLocked,
             dismissedAt = item.dismissedAt,
         )
     }
@@ -203,13 +211,14 @@ interface TodoDao {
         FocusSettingsEntity::class,
         TodoListEntity::class,
     ],
-    version = 8,
+    version = 9,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 6, to = 7),
         AutoMigration(from = 7, to = 8),
+        AutoMigration(from = 8, to = 9),
     ],
     exportSchema = true,
 )

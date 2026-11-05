@@ -258,6 +258,19 @@ class TodoViewModel @JvmOverloads constructor(
         }
     }
 
+    /** 备份恢复替换了整库数据后，丢弃旧编辑上下文并重新读取所有页面状态。 */
+    fun refreshAfterExternalDataChange() {
+        _state.value = _state.value.copy(
+            detail = null,
+            addOpen = false,
+            aiDraft = null,
+            aiError = null,
+            aiBusy = false,
+            message = null,
+        )
+        refresh()
+    }
+
     private suspend fun reload() {
         val pending = useCases.listIncomplete()
         val completed = useCases.listCompleted()

@@ -128,6 +128,12 @@ class TodoUseCases(
         missedRemindersLocked(clock.now())
     }
 
+    /**
+     * 让备份恢复等跨仓库操作与普通事项写入串行执行。
+     * 调用方不得在 [block] 内再次进入本用例的其它加锁方法，否则会自锁。
+     */
+    suspend fun <T> withMutationLock(block: suspend () -> T): T = mutations.withLock { block() }
+
     suspend fun reconcileReminders(
         previousZone: ZoneId? = null,
         currentZone: ZoneId = zone,

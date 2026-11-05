@@ -49,6 +49,17 @@ class AppPreferencesStore(
         return load()
     }
 
+    /** 主题与字体一起提交，备份恢复时避免只写入一半。 */
+    fun save(next: AppPreferences): AppPreferences {
+        check(
+            preferences.edit().apply {
+                putString(KEY_THEME, next.theme.name)
+                putString(KEY_FONT_SIZE, next.fontSize.name)
+            }.commit(),
+        ) { "偏好设置保存失败" }
+        return load()
+    }
+
     private inline fun <reified T : Enum<T>> enumValueOrDefault(
         value: String?,
         fallback: T,

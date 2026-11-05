@@ -1,6 +1,9 @@
 package com.voicetodo.ui
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,22 +22,29 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.alarm.ReminderCapabilities
+import com.voicetodo.domain.BackupPreview
 import com.voicetodo.domain.FocusSettings
+import com.voicetodo.domain.RestoreCopyInfo
 import com.voicetodo.settings.AppPreferences
 import com.voicetodo.settings.FontSizePreference
 import com.voicetodo.settings.ThemePreference
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private enum class SettingsDestination {
     Root,
@@ -61,7 +71,40 @@ fun SettingsScreen(
 ) {
     val settingsState by settingsVm.state.collectAsStateWithLifecycle()
     val todoState by todoVm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var destination by rememberSaveable { mutableStateOf(SettingsDestination.Root) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        uri?.let(settingsVm::exportTo)
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri?.let {
+            val label = runCatching {
+                context.contentResolver.query(
+                    it,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            }.getOrNull().orEmpty().ifBlank { "所选备份文件" }
+            settingsVm.previewImport(it, label)
+        }
+    }
+
+    LaunchedEffect(settingsState.dataBackup.restoreGeneration) {
+        if (settingsState.dataBackup.restoreGeneration > 0) {
+            todoVm.refreshAfterExternalDataChange()
+        }
+    }
+    LaunchedEffect(destination) {
+        if (destination == SettingsDestination.Data) settingsVm.refreshRestoreCopies()
+    }
 
     LifecycleResumeEffect(settingsVm) {
         settingsVm.refreshCapabilities()
@@ -103,11 +146,14 @@ fun SettingsScreen(
             onOpenSettings = onOpenReminderSettings,
             onBack = { destination = SettingsDestination.Root },
         )
-        SettingsDestination.Data -> PendingFeatureScreen(
-            title = "数据管理",
-            body = "备份导出、预览替换导入与恢复副本将由 #18 交付。此入口已经保留。",
-            testTag = "data_management_screen",
+        SettingsDestination.Data -> DataManagementScreen(
+            state = settingsState.dataBackup,
             onBack = { destination = SettingsDestination.Root },
+            onPickExport = { exportLauncher.launch(settingsVm.dataExportFileName()) },
+            onPickImport = { importLauncher.launch(arrayOf("*/*")) },
+            onConfirmImport = settingsVm::confirmImport,
+            onCancelImport = settingsVm::cancelImport,
+            onPreviewRestoreCopy = settingsVm::previewRestoreCopy,
         )
         SettingsDestination.Trash -> PendingFeatureScreen(
             title = "回收站",
@@ -260,7 +306,7 @@ internal fun MySettingsContent(
         item {
             SettingsRow(
                 title = "数据管理",
-                detail = "备份与恢复入口（由 #18 交付）",
+                detail = "备份导出、预览替换导入与恢复副本",
                 tag = "settings_data",
                 onClick = onOpenData,
             )
@@ -583,6 +629,232 @@ private fun readyText(ready: Boolean?): String = when (ready) {
     true -> "已具备"
     false -> "未具备"
     null -> "无法读取"
+}
+
+private val BACKUP_DISPLAY_TIME: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+
+@Composable
+internal fun DataManagementScreen(
+    state: DataBackupUiState,
+    onBack: () -> Unit,
+    onPickExport: () -> Unit,
+    onPickImport: () -> Unit,
+    onConfirmImport: () -> Unit,
+    onCancelImport: () -> Unit,
+    onPreviewRestoreCopy: (String) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp).testTag("data_management_screen"),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text("数据管理", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "备份包含事项、重复规则、清单、专注历史、番茄设置和外观偏好；" +
+                    "不包含录音、AI 服务地址/密钥或权限授权。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("backup_scope"),
+            )
+        }
+        item {
+            Card(Modifier.fillMaxWidth().testTag("backup_export_section")) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("导出备份", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "选择保存位置后会写入一个 JSON 文件；文件可由你自行保管。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(
+                        onClick = onPickExport,
+                        enabled = !state.busy,
+                        modifier = Modifier.testTag("backup_export"),
+                    ) {
+                        Text("导出备份文件")
+                    }
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth().testTag("backup_import_section")) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("导入备份", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "导入只做替换，不合并数据。确认前会先显示版本、导出时间和数量，" +
+                            "并自动把当前数据保存为恢复副本。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(
+                        onClick = onPickImport,
+                        enabled = !state.busy,
+                        modifier = Modifier.testTag("backup_import_pick"),
+                    ) {
+                        Text("选择备份文件")
+                    }
+                    state.pending?.let { Text("待导入：${it.label}", style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+        }
+        state.preview?.let { preview ->
+            item {
+                BackupPreviewCard(
+                    preview = preview,
+                    busy = state.busy,
+                    onConfirm = onConfirmImport,
+                    onCancel = onCancelImport,
+                )
+            }
+        }
+        item {
+            Text("恢复副本", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "每次替换导入前自动生成；副本保存在应用私有目录，可在这里再次预览并恢复。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (state.restoreCopies.isEmpty()) {
+            item {
+                Text(
+                    "还没有恢复副本。",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("restore_copies_empty"),
+                )
+            }
+        } else {
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth().testTag("restore_copies"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.restoreCopies.forEach { copy ->
+                        RestoreCopyRow(copy, state.busy, onPreviewRestoreCopy)
+                    }
+                }
+            }
+        }
+        state.error?.let {
+            item {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("backup_error"),
+                )
+            }
+        }
+        state.message?.let {
+            item {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("backup_message"),
+                )
+            }
+        }
+        item {
+            Text(
+                "替换成功后旧提醒会被取消，再按新数据重建未来提醒；已经过去的提醒不会自动补响。" +
+                    "备份中正在运行的番茄会话会保留历史，但不会自动续跑。",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("backup_restore_rules"),
+            )
+        }
+        item {
+            Button(onClick = onBack, modifier = Modifier.testTag("data_management_back")) {
+                Text("返回我的")
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackupPreviewCard(
+    preview: BackupPreview,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().testTag("backup_preview")) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("导入预览", style = MaterialTheme.typography.titleMedium)
+            Text("格式版本 ${preview.formatVersion}", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "应用版本 ${preview.appVersion.ifBlank { "未知" }}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "导出时间 ${BACKUP_DISPLAY_TIME.format(preview.exportedAt)}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "事项 ${preview.counts.itemCount} 个（其中重复安排 ${preview.counts.recurringSeriesCount} 个）",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "清单 ${preview.counts.listCount} 个 · 专注记录 ${preview.counts.focusSessionCount} 条",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "确认后会先生成当前数据的恢复副本，再替换全部数据并重建未来提醒。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onConfirm,
+                    enabled = !busy,
+                    modifier = Modifier.testTag("backup_confirm"),
+                ) {
+                    Text("替换并重建提醒")
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    enabled = !busy,
+                    modifier = Modifier.testTag("backup_cancel"),
+                ) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestoreCopyRow(
+    copy: RestoreCopyInfo,
+    busy: Boolean,
+    onPreview: (String) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(copy.name, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${BACKUP_DISPLAY_TIME.format(copy.createdAt)} · " +
+                        String.format(Locale.getDefault(), "%.1f KB", copy.sizeBytes / 1024.0),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(
+                onClick = { onPreview(copy.name) },
+                enabled = !busy,
+                modifier = Modifier.testTag("restore_copy_${copy.name}"),
+            ) {
+                Text("预览")
+            }
+        }
+    }
 }
 
 @Composable

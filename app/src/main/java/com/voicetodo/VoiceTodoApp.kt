@@ -12,13 +12,20 @@ import com.voicetodo.alarm.SystemReminderScheduler
 import com.voicetodo.alarm.SystemFocusScheduler
 import com.voicetodo.alarm.ReminderRecoveryCoordinator
 import com.voicetodo.data.FileTodoRepository
+import com.voicetodo.data.JsonBackupCodec
+import com.voicetodo.data.PrivateBackupFileStore
+import com.voicetodo.data.RoomBackupStore
 import androidx.room.Room
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.TodoDatabase
 import com.voicetodo.data.RoomFocusRepository
+import com.voicetodo.domain.BackupManager
+import com.voicetodo.domain.DataBackupUseCases
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.domain.FocusUseCases
+import com.voicetodo.settings.AppPreferencesStore
+import java.io.File
 import java.time.ZoneId
 
 /**
@@ -48,6 +55,9 @@ class VoiceTodoApp : Application() {
     lateinit var reminderRecovery: ReminderRecoveryCoordinator
         private set
 
+    lateinit var backupManager: BackupManager
+        private set
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -56,7 +66,6 @@ class VoiceTodoApp : Application() {
         val db = Room.databaseBuilder(this, TodoDatabase::class.java, "todos.db")
             .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
             .build()
-
         repository = RoomTodoRepository(
             db,
             FileTodoRepository(filesDir, ZoneId.systemDefault()),
@@ -67,6 +76,20 @@ class VoiceTodoApp : Application() {
         useCases = TodoUseCases(repository, scheduler, SystemClock())
         focusUseCases = FocusUseCases(focusRepository, focusScheduler, SystemClock(), repository, ZoneId.systemDefault())
         reminderRecovery = ReminderRecoveryCoordinator(this, useCases)
+        backupManager = DataBackupUseCases(
+            store = RoomBackupStore(db, repository),
+            codec = JsonBackupCodec,
+            files = PrivateBackupFileStore(File(filesDir, PrivateBackupFileStore.directoryName())),
+            scheduler = scheduler,
+            focusScheduler = focusScheduler,
+            loadPreferences = { AppPreferencesStore(this).load() },
+            savePreferences = { AppPreferencesStore(this).save(it) },
+            clock = SystemClock(),
+            zone = { ZoneId.systemDefault() },
+            appVersion = appVersion(),
+            reconcile = { reminderRecovery.reconcile() },
+            exclusive = { block -> useCases.withMutationLock { block() } },
+        )
 
         // 冷启动/重开时对账：把仓库中仍有效的未来提醒重新排入系统（幂等）。
         appScope.launch {
@@ -85,6 +108,10 @@ class VoiceTodoApp : Application() {
                 .onFailure { android.util.Log.e("VoiceTodoApp", "Reminder reconcile failed", it) }
         }
     }
+
+    private fun appVersion(): String = runCatching {
+        packageManager.getPackageInfo(packageName, 0).versionName
+    }.getOrNull().orEmpty().ifBlank { "未知" }
 
     companion object {
         const val CHANNEL_REMINDER = "reminder_channel"

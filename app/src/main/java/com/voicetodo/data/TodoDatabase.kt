@@ -185,11 +185,16 @@ interface TodoDao {
     @Upsert suspend fun save(item: TodoEntity)
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun importItems(items: List<TodoEntity>)
     @Query("DELETE FROM todos WHERE id = :id") suspend fun delete(id: String)
+    @Query("DELETE FROM todos") suspend fun clearTodos()
     @Query("DELETE FROM deliveries WHERE itemId = :id") suspend fun deleteDeliveries(id: String)
+    @Query("DELETE FROM deliveries") suspend fun clearDeliveries()
+    @Query("DELETE FROM reminder_deliveries") suspend fun clearReminderDeliveries()
     @Query("SELECT * FROM todo_lists ORDER BY createdAt ASC, id ASC") suspend fun lists(): List<TodoListEntity>
     @Query("SELECT * FROM todo_lists WHERE id = :id") suspend fun findList(id: String): TodoListEntity?
     @Upsert suspend fun saveList(list: TodoListEntity)
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun importLists(lists: List<TodoListEntity>)
     @Query("DELETE FROM todo_lists WHERE id = :id") suspend fun deleteList(id: String)
+    @Query("DELETE FROM todo_lists") suspend fun clearLists()
     @Query("UPDATE todos SET listId = NULL WHERE listId = :id") suspend fun clearList(id: String)
     @Query("SELECT deliveredAt FROM deliveries WHERE itemId = :id AND reminderRevision = :revision")
     suspend fun deliveredAt(id: String, revision: Long): Instant?

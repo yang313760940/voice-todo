@@ -1,22 +1,46 @@
 package com.voicetodo.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.voicetodo.VoiceTodoApp
 import com.voicetodo.alarm.ReminderCapabilities
+import com.voicetodo.domain.BackupManager
+import com.voicetodo.domain.BackupPreview
+import com.voicetodo.domain.BackupRejectedException
 import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.FocusUseCases
+import com.voicetodo.domain.RestoreCopyInfo
 import com.voicetodo.settings.AppPreferences
 import com.voicetodo.settings.AppPreferencesStore
 import com.voicetodo.settings.FontSizePreference
 import com.voicetodo.settings.ThemePreference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+data class PendingBackupImport(
+    val label: String,
+    val json: String? = null,
+    val restoreCopyName: String? = null,
+)
+
+data class DataBackupUiState(
+    val busy: Boolean = false,
+    val preview: BackupPreview? = null,
+    val pending: PendingBackupImport? = null,
+    val message: String? = null,
+    val error: String? = null,
+    val restoreCopies: List<RestoreCopyInfo> = emptyList(),
+    /** 每次成功替换后递增，界面据此刷新所有事项页面。 */
+    val restoreGeneration: Long = 0,
+)
 
 data class SettingsUiState(
     val preferences: AppPreferences = AppPreferences(),
@@ -24,6 +48,7 @@ data class SettingsUiState(
     val capabilities: ReminderCapabilities? = null,
     val busy: Boolean = false,
     val message: String? = null,
+    val dataBackup: DataBackupUiState = DataBackupUiState(),
 )
 
 class SettingsViewModel @JvmOverloads constructor(
@@ -32,6 +57,7 @@ class SettingsViewModel @JvmOverloads constructor(
     private val focusUseCases: FocusUseCases = (app as VoiceTodoApp).focusUseCases,
     private val capabilitiesProvider: () -> ReminderCapabilities =
         { (app as VoiceTodoApp).scheduler.capabilities() },
+    private val backup: BackupManager? = (app as? VoiceTodoApp)?.backupManager,
 ) : AndroidViewModel(app) {
     private val operations = Mutex()
     private val _state = MutableStateFlow(
@@ -100,5 +126,218 @@ class SettingsViewModel @JvmOverloads constructor(
                     _state.value = _state.value.copy(focusSettings = settings)
                 }
         }
+    }
+
+    fun dataExportFileName(): String =
+        backup?.suggestedFileName() ?: "voice-todo-backup.json"
+
+    fun exportTo(uri: Uri) {
+        val manager = backup ?: return dataError("备份功能不可用")
+        if (_state.value.dataBackup.busy) return
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val export = withContext(Dispatchers.Default) { manager.export() }
+                withContext(Dispatchers.IO) {
+                    val resolver = getApplication<Application>().contentResolver
+                    val output = resolver.openOutputStream(uri, "wt")
+                        ?: throw IllegalStateException("无法写入所选位置")
+                    output.use { it.write(export.json.toByteArray(Charsets.UTF_8)) }
+                }
+                val counts = export.preview.counts
+                _state.value = _state.value.copy(
+                    dataBackup = _state.value.dataBackup.copy(
+                        busy = false,
+                        error = null,
+                        message = "已导出 ${counts.itemCount} 个事项、${counts.listCount} 个清单、" +
+                            "${counts.focusSessionCount} 条专注记录。",
+                    ),
+                )
+            } catch (error: Exception) {
+                dataError("导出失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun previewImport(uri: Uri, label: String) {
+        val manager = backup ?: return dataError("备份功能不可用")
+        if (_state.value.dataBackup.busy) return
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val text = withContext(Dispatchers.IO) { readImport(uri) }
+                applyPreview(manager, text, label)
+            } catch (error: Exception) {
+                rejectPreview(error)
+            }
+        }
+    }
+
+    /** 供文件选择器之外（含测试）直接校验一段备份文本。 */
+    fun previewImport(text: String, label: String) {
+        val manager = backup ?: return dataError("备份功能不可用")
+        if (_state.value.dataBackup.busy) return
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                applyPreview(manager, text, label)
+            } catch (error: Exception) {
+                rejectPreview(error)
+            }
+        }
+    }
+
+    fun previewRestoreCopy(name: String) {
+        val manager = backup ?: return dataError("备份功能不可用")
+        if (_state.value.dataBackup.busy) return
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val preview = withContext(Dispatchers.IO) { manager.previewRestoreCopy(name) }
+                _state.value = _state.value.copy(
+                    dataBackup = _state.value.dataBackup.copy(
+                        busy = false,
+                        pending = PendingBackupImport(
+                            label = "恢复副本 $name",
+                            restoreCopyName = name,
+                        ),
+                        preview = preview,
+                        message = null,
+                        error = null,
+                    ),
+                )
+            } catch (error: Exception) {
+                rejectPreview(error)
+            }
+        }
+    }
+
+    fun cancelImport() {
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(
+                pending = null,
+                preview = null,
+                message = null,
+                error = null,
+            ),
+        )
+    }
+
+    fun confirmImport() {
+        val manager = backup ?: return dataError("备份功能不可用")
+        val pending = _state.value.dataBackup.pending ?: return
+        if (_state.value.dataBackup.busy) return
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val outcome = withContext(Dispatchers.IO) {
+                    when {
+                        pending.restoreCopyName != null ->
+                            manager.replaceRestoreCopy(pending.restoreCopyName)
+                        pending.json != null -> manager.replace(pending.json)
+                        else -> throw BackupRejectedException("没有可导入的备份内容")
+                    }
+                }
+                val restoredPreferences = preferencesStore.load()
+                val restoredFocus = runCatching { focusUseCases.snapshot().settings }
+                    .getOrDefault(_state.value.focusSettings)
+                val copies = runCatching { manager.restoreCopies() }.getOrDefault(emptyList())
+                _state.value = _state.value.copy(
+                    preferences = restoredPreferences,
+                    focusSettings = restoredFocus,
+                    dataBackup = _state.value.dataBackup.copy(
+                        busy = false,
+                        pending = null,
+                        preview = null,
+                        restoreCopies = copies,
+                        restoreGeneration = _state.value.dataBackup.restoreGeneration + 1,
+                        message = "已用「${pending.label}」替换本机数据，并重建未来提醒。" +
+                            "替换前的数据已保存为恢复副本 ${outcome.restoreCopyName}。",
+                        error = outcome.warning,
+                    ),
+                )
+            } catch (error: Exception) {
+                dataError("导入失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun refreshRestoreCopies() {
+        val manager = backup ?: return
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { manager.restoreCopies() } }
+                .onSuccess { copies ->
+                    _state.value = _state.value.copy(
+                        dataBackup = _state.value.dataBackup.copy(restoreCopies = copies),
+                    )
+                }
+        }
+    }
+
+    private suspend fun applyPreview(manager: BackupManager, text: String, label: String) {
+        val preview = withContext(Dispatchers.Default) { manager.preview(text) }
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(
+                busy = false,
+                pending = PendingBackupImport(label = label, json = text),
+                preview = preview,
+                message = null,
+                error = null,
+            ),
+        )
+    }
+
+    private fun rejectPreview(error: Exception) {
+        val reason = error.message ?: "无法读取备份文件"
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(
+                busy = false,
+                pending = null,
+                preview = null,
+                message = null,
+                error = "无法导入：$reason",
+            ),
+        )
+    }
+
+    private fun dataError(message: String) {
+        _state.value = _state.value.copy(
+            dataBackup = _state.value.dataBackup.copy(
+                busy = false,
+                message = null,
+                error = message,
+            ),
+        )
+    }
+
+    private fun readImport(uri: Uri): String {
+        val resolver = getApplication<Application>().contentResolver
+        return resolver.openInputStream(uri)?.use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8 * 1024)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_IMPORT_BYTES) throw BackupRejectedException("备份文件超过 20 MB")
+                output.write(buffer, 0, read)
+            }
+            output.toString(Charsets.UTF_8.name())
+        } ?: throw IllegalStateException("无法读取所选文件")
+    }
+
+    private companion object {
+        const val MAX_IMPORT_BYTES = 20 * 1024 * 1024
     }
 }

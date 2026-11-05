@@ -75,6 +75,8 @@ interface FocusDao {
     @Query("SELECT * FROM focus_sessions WHERE state IN ('Running', 'Paused', 'EndedPendingConfirmation') ORDER BY startedAt DESC LIMIT 1")
     suspend fun active(): FocusSessionEntity?
     @Upsert suspend fun save(session: FocusSessionEntity)
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun importAll(sessions: List<FocusSessionEntity>)
+    @Query("DELETE FROM focus_sessions") suspend fun clearSessions()
     @Query("SELECT * FROM focus_settings WHERE id = 1")
     suspend fun settings(): FocusSettingsEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSettings(settings: FocusSettingsEntity)

@@ -12,6 +12,8 @@ import com.voicetodo.domain.BackupRejectedException
 import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.FocusUseCases
 import com.voicetodo.domain.RestoreCopyInfo
+import com.voicetodo.domain.TrashedItem
+import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.settings.AppPreferences
 import com.voicetodo.settings.AppPreferencesStore
 import com.voicetodo.settings.FontSizePreference
@@ -42,6 +44,15 @@ data class DataBackupUiState(
     val restoreGeneration: Long = 0,
 )
 
+data class TrashUiState(
+    val items: List<TrashedItem> = emptyList(),
+    val busy: Boolean = false,
+    val message: String? = null,
+    val error: String? = null,
+    /** 每次恢复或永久删除后递增，事项页面据此刷新。 */
+    val changeGeneration: Long = 0,
+)
+
 data class SettingsUiState(
     val preferences: AppPreferences = AppPreferences(),
     val focusSettings: FocusSettings = FocusSettings(),
@@ -49,6 +60,7 @@ data class SettingsUiState(
     val busy: Boolean = false,
     val message: String? = null,
     val dataBackup: DataBackupUiState = DataBackupUiState(),
+    val trash: TrashUiState = TrashUiState(),
 )
 
 class SettingsViewModel @JvmOverloads constructor(
@@ -58,6 +70,7 @@ class SettingsViewModel @JvmOverloads constructor(
     private val capabilitiesProvider: () -> ReminderCapabilities =
         { (app as VoiceTodoApp).scheduler.capabilities() },
     private val backup: BackupManager? = (app as? VoiceTodoApp)?.backupManager,
+    private val todoUseCases: TodoUseCases? = (app as? VoiceTodoApp)?.useCases,
 ) : AndroidViewModel(app) {
     private val operations = Mutex()
     private val _state = MutableStateFlow(
@@ -116,6 +129,82 @@ class SettingsViewModel @JvmOverloads constructor(
     fun refreshCapabilities() {
         _state.value = _state.value.copy(
             capabilities = runCatching(capabilitiesProvider).getOrNull(),
+        )
+    }
+
+    fun refreshTrash() {
+        val useCases = todoUseCases ?: return trashError("回收站功能不可用")
+        if (_state.value.trash.busy) return
+        _state.value = _state.value.copy(
+            trash = _state.value.trash.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val items = useCases.listTrash()
+                _state.value = _state.value.copy(
+                    trash = _state.value.trash.copy(busy = false, items = items, error = null),
+                )
+            } catch (error: Exception) {
+                trashError("读取回收站失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun restoreTrash(id: String) {
+        val useCases = todoUseCases ?: return trashError("回收站功能不可用")
+        if (_state.value.trash.busy) return
+        _state.value = _state.value.copy(
+            trash = _state.value.trash.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                val result = useCases.restoreDeleted(id)
+                refreshTrashAfterChange(
+                    useCases,
+                    message = if (result.pastReminderCleared) {
+                        "事项已恢复；旧提醒已过期并清除，请重新安排"
+                    } else {
+                        "事项已恢复，未来提醒已重新安排"
+                    },
+                )
+            } catch (error: Exception) {
+                trashError("恢复失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun permanentlyDeleteTrash(id: String) {
+        val useCases = todoUseCases ?: return trashError("回收站功能不可用")
+        if (_state.value.trash.busy) return
+        _state.value = _state.value.copy(
+            trash = _state.value.trash.copy(busy = true, message = null, error = null),
+        )
+        viewModelScope.launch {
+            try {
+                useCases.permanentlyDelete(id)
+                refreshTrashAfterChange(useCases, message = "事项已永久删除")
+            } catch (error: Exception) {
+                trashError("永久删除失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    private suspend fun refreshTrashAfterChange(useCases: TodoUseCases, message: String) {
+        val items = useCases.listTrash()
+        _state.value = _state.value.copy(
+            trash = _state.value.trash.copy(
+                busy = false,
+                items = items,
+                message = message,
+                error = null,
+                changeGeneration = _state.value.trash.changeGeneration + 1,
+            ),
+        )
+    }
+
+    private fun trashError(message: String) {
+        _state.value = _state.value.copy(
+            trash = _state.value.trash.copy(busy = false, error = message, message = null),
         )
     }
 

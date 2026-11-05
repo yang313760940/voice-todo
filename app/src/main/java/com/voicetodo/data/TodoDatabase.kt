@@ -58,6 +58,8 @@ data class TodoEntity(
     @ColumnInfo(defaultValue = "0") val readAloudWhenLocked: Boolean = false,
     /** 本次提醒被关闭/延后后的已处理时刻，使旧投递失效。 */
     val dismissedAt: Instant? = null,
+    /** 进入回收站的时刻；正常事项为空。 */
+    @ColumnInfo(defaultValue = "NULL") val deletedAt: Instant? = null,
 ) {
     fun item() = TodoItem(
         id = id,
@@ -79,6 +81,7 @@ data class TodoEntity(
         readAloud = readAloud,
         readAloudWhenLocked = readAloudWhenLocked,
         dismissedAt = dismissedAt,
+        deletedAt = deletedAt,
     )
     companion object {
         fun from(item: TodoItem) = TodoEntity(
@@ -101,6 +104,7 @@ data class TodoEntity(
             readAloud = item.readAloud,
             readAloudWhenLocked = item.readAloudWhenLocked,
             dismissedAt = item.dismissedAt,
+            deletedAt = item.deletedAt,
         )
     }
 }
@@ -176,12 +180,16 @@ class TimeConverters {
 
 @Dao
 interface TodoDao {
-    @Query("SELECT * FROM todos ORDER BY id") suspend fun all(): List<TodoEntity>
-    @Query("SELECT * FROM todos WHERE completedAt IS NULL ORDER BY remindAt IS NULL, remindAt ASC, createdAt DESC, id ASC")
+    @Query("SELECT * FROM todos WHERE deletedAt IS NULL ORDER BY id") suspend fun all(): List<TodoEntity>
+    @Query("SELECT * FROM todos ORDER BY id") suspend fun allIncludingDeleted(): List<TodoEntity>
+    @Query("SELECT * FROM todos WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC, id ASC")
+    suspend fun trashed(): List<TodoEntity>
+    @Query("SELECT * FROM todos WHERE deletedAt IS NULL AND completedAt IS NULL ORDER BY remindAt IS NULL, remindAt ASC, createdAt DESC, id ASC")
     suspend fun incomplete(): List<TodoEntity>
-    @Query("SELECT * FROM todos WHERE completedAt IS NOT NULL ORDER BY completedAt DESC, id ASC")
+    @Query("SELECT * FROM todos WHERE deletedAt IS NULL AND completedAt IS NOT NULL ORDER BY completedAt DESC, id ASC")
     suspend fun completed(): List<TodoEntity>
-    @Query("SELECT * FROM todos WHERE id = :id") suspend fun find(id: String): TodoEntity?
+    @Query("SELECT * FROM todos WHERE id = :id AND deletedAt IS NULL") suspend fun find(id: String): TodoEntity?
+    @Query("SELECT * FROM todos WHERE id = :id") suspend fun findAny(id: String): TodoEntity?
     @Upsert suspend fun save(item: TodoEntity)
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun importItems(items: List<TodoEntity>)
     @Query("DELETE FROM todos WHERE id = :id") suspend fun delete(id: String)
@@ -216,7 +224,7 @@ interface TodoDao {
         FocusSettingsEntity::class,
         TodoListEntity::class,
     ],
-    version = 9,
+    version = 10,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -224,6 +232,7 @@ interface TodoDao {
         AutoMigration(from = 6, to = 7),
         AutoMigration(from = 7, to = 8),
         AutoMigration(from = 8, to = 9),
+        AutoMigration(from = 9, to = 10),
     ],
     exportSchema = true,
 )

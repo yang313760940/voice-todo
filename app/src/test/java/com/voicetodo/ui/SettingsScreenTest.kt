@@ -14,7 +14,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.domain.FocusSettings
+import com.voicetodo.domain.TrashedItem
+import com.voicetodo.domain.TodoItem
 import com.voicetodo.settings.AppPreferences
+import java.time.Duration
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -81,6 +85,44 @@ class SettingsScreenTest {
         assertEquals("trash", opened)
         compose.onNodeWithTag("settings_about").performScrollTo().performClick()
         assertEquals("about", opened)
+    }
+
+    @Test fun trashPageShowsRetentionAndSupportsRestoreAndConfirmedPermanentDelete() {
+        val deletedAt = Instant.parse("2026-11-05T01:00:00Z")
+        val item = TodoItem(
+            title = "误删事项",
+            createdAt = deletedAt.minusSeconds(60),
+            deletedAt = deletedAt,
+        )
+        val trashed = TrashedItem(
+            item = item,
+            deletedAt = deletedAt,
+            expiresAt = deletedAt.plus(Duration.ofDays(30)),
+            daysRemaining = 30,
+        )
+        var restored = ""
+        var deleted = ""
+        compose.setContent {
+            MaterialTheme {
+                TrashScreen(
+                    state = TrashUiState(items = listOf(trashed)),
+                    onBack = {},
+                    onRestore = { restored = it },
+                    onPermanentlyDelete = { deleted = it },
+                    onRefresh = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("trash_item_0").assertIsDisplayed()
+        compose.onNodeWithTag("trash_remaining_0").assertIsDisplayed()
+        compose.onNodeWithText("误删事项").assertIsDisplayed()
+        compose.onNodeWithTag("trash_restore_0").performClick()
+        assertEquals(item.id, restored)
+        compose.onNodeWithTag("trash_delete_0").performClick()
+        compose.onNodeWithTag("trash_delete_dialog").assertIsDisplayed()
+        compose.onNodeWithTag("trash_confirm_delete").performClick()
+        assertEquals(item.id, deleted)
     }
 
     @Test fun aboutPageStatesVersionDataBoundaryAndAiSendingScope() {

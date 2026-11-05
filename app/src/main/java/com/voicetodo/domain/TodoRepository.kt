@@ -16,6 +16,12 @@ interface TodoRepository {
     }
     /** 按 id 查找。 */
     suspend fun findById(id: String): TodoItem?
+    /** 包含回收站事项的按 id 查找；正常业务读取应使用 [findById]。 */
+    suspend fun findAnyById(id: String): TodoItem? = findById(id)
+    /** 包含回收站事项的全部记录；用于阻止已删除的重复实例被重新生成。 */
+    suspend fun allIncludingDeleted(): List<TodoItem> = all()
+    /** 回收站事项，按删除时间倒序。 */
+    suspend fun trashed(): List<TodoItem> = emptyList()
     /** 删除。 */
     suspend fun delete(id: String)
     suspend fun incomplete(): List<TodoItem> = all().filter { it.completedAt == null }

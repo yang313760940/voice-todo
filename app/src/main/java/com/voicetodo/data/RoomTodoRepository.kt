@@ -58,6 +58,9 @@ class RoomTodoRepository(
     override suspend fun incomplete() = ready { dao.incomplete().map { it.item() } }
     override suspend fun completed() = ready { dao.completed().map { it.item() } }
     override suspend fun findById(id: String) = ready { dao.find(id)?.item() }
+    override suspend fun findAnyById(id: String) = ready { dao.findAny(id)?.item() }
+    override suspend fun allIncludingDeleted() = ready { dao.allIncludingDeleted().map { it.item() } }
+    override suspend fun trashed() = ready { dao.trashed().map { it.item() } }
     override suspend fun save(item: TodoItem) = ready { dao.save(TodoEntity.from(item)) }
     override suspend fun insertDrafts(items: List<TodoItem>): List<TodoItem> = ready {
         db.withTransaction {

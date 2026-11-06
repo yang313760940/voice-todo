@@ -38,9 +38,6 @@ import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
-import com.voicetodo.speech.AudioRecorder
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
 import java.time.Instant
 import java.time.DayOfWeek
 import java.time.ZoneId
@@ -96,20 +93,8 @@ class AiDraftFlowTest {
                     useCases = TodoUseCases(repo, scheduler, clock),
                     storage = repo,
                     capabilities = { ReminderCapabilities(true, true, true) },
-                    transcriber = object : OfflineTranscriber {
-                        override fun isReady() = true
-                        override fun transcribe(samples: FloatArray, sampleRate: Int) =
-                            TranscriptResult.Success("测试识别")
-                    },
                     clock = clock,
                     zoneId = ZoneId.of("Asia/Shanghai"),
-                    recorder = object : AudioRecorder {
-                        override val sampleRate = 16_000
-                        override fun start() = true
-                        override fun stop() = FloatArray(0)
-                        override fun cancel() = Unit
-                        override fun release() = Unit
-                    },
                     aiSettingsStore = settingsStore,
                     aiClient = object : AiAssistClient by aiClient {
                         override suspend fun organizeDrafts(

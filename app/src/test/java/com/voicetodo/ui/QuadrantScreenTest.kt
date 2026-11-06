@@ -41,8 +41,6 @@ import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -95,11 +93,6 @@ class QuadrantScreenTest {
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
                 TodoViewModel(
                     app, useCases, repo, { ReminderCapabilities(true, true, true) },
-                    object : OfflineTranscriber {
-                        override fun isReady() = true
-                        override fun transcribe(samples: FloatArray, sampleRate: Int) =
-                            TranscriptResult.Success("From speech")
-                    },
                     clock, ZoneId.of("Asia/Shanghai"),
                 ) as T
         })[TodoViewModel::class.java]

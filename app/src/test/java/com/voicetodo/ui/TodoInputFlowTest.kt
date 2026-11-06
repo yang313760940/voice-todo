@@ -4,7 +4,6 @@ import android.app.Application
 import android.os.Looper
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -24,9 +23,6 @@ import com.voicetodo.data.TodoDatabase
 import com.voicetodo.domain.FrozenClock
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
-import com.voicetodo.speech.AudioRecorder
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -53,9 +49,6 @@ class TodoInputFlowTest {
     private lateinit var vm: TodoViewModel
     private val store = ViewModelStore()
     private val clock = FrozenClock(Instant.parse("2026-11-04T09:00:00Z"))
-    private val recorder = FakeAudioRecorder()
-    private val transcriber = FakeTranscriber()
-    private var canRecord = true
 
     @Before fun setup() {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -69,11 +62,9 @@ class TodoInputFlowTest {
                     app = app,
                     useCases = useCases,
                     storage = repo,
-                    capabilities = { ReminderCapabilities(true, true, canRecord) },
-                    transcriber = transcriber,
+                    capabilities = { ReminderCapabilities(true, true, true) },
                     clock = clock,
                     zoneId = ZoneId.of("Asia/Shanghai"),
-                    recorder = recorder,
                 ) as T
         })[TodoViewModel::class.java]
         compose.setContent { MaterialTheme { TodoScreen(vm) } }
@@ -87,96 +78,28 @@ class TodoInputFlowTest {
         db.close()
     }
 
-    @Test fun recognitionFailureKeepsExistingTextAndReleasesTemporarySamples() {
-        transcriber.result = TranscriptResult.Failure("固定失败")
-        val samples = floatArrayOf(0.5f, -0.5f)
-        recorder.nextSamples = samples
-
-        compose.runOnIdle {
-            vm.onDraftTextChange("已经取得的文字")
-            vm.onToggleRecord()
-            vm.onToggleRecord()
-        }
-        waitFor { vm.state.value.recordState == RecordState.Idle && vm.state.value.inputError != null }
-
-        assertEquals("已经取得的文字", vm.state.value.draftText)
-        assertTrue(vm.state.value.inputError!!.contains("固定失败"))
-        assertTrue("转写结束后应清零临时采样", samples.all { it == 0f })
-        assertEquals(1, recorder.startCount)
-        assertEquals(1, recorder.stopCount)
-    }
-
-    @Test fun startThenEndTranscribesOnceAndAllowsASecondRecording() {
-        recorder.nextSamples = floatArrayOf(0.4f)
-        transcriber.result = TranscriptResult.Success("第一次识别")
-        compose.runOnIdle {
-            vm.onToggleRecord()
-            vm.onToggleRecord()
-        }
-        waitFor { vm.state.value.recordState == RecordState.Idle && vm.state.value.draftText == "第一次识别" }
-
-        compose.runOnIdle { vm.onToggleRecord() }
-        assertEquals(RecordState.Recording, vm.state.value.recordState)
-        assertEquals(2, recorder.startCount)
-        assertEquals(1, recorder.stopCount)
-        compose.runOnIdle { vm.onCancelRecording() }
-    }
-
-    @Test fun cancellingRecordingKeepsTextReleasesMicAndAllowsRecordingAgain() {
-        compose.runOnIdle {
-            vm.onDraftTextChange("保留的文字")
-            vm.onToggleRecord()
-            vm.onCancelRecording()
-            vm.onToggleRecord()
-        }
-
-        assertEquals(RecordState.Recording, vm.state.value.recordState)
-        assertEquals("保留的文字", vm.state.value.draftText)
-        assertEquals(2, recorder.startCount)
-        assertEquals(1, recorder.cancelCount)
-
-        compose.runOnIdle { vm.onCancelRecording() }
-        assertEquals(RecordState.Idle, vm.state.value.recordState)
-        assertEquals(2, recorder.cancelCount)
-    }
-
-    @Test fun cancellingBeforeTranscriptionStartsStillClearsInjectedTemporaryAudio() {
-        val samples = floatArrayOf(0.8f, -0.2f)
-        compose.runOnIdle {
-            vm.onDraftTextChange("取消识别也保留")
-            vm.transcribeSamplesForTest(samples, 16_000)
-            vm.onCancelRecording()
-        }
-        waitFor { samples.all { it == 0f } }
-        assertEquals(RecordState.Idle, vm.state.value.recordState)
-        assertEquals("取消识别也保留", vm.state.value.draftText)
-    }
-
-    @Test fun missingPermissionDisablesOnlyVoiceAndLeavesTextManualCreationUsable() {
-        canRecord = false
-        compose.runOnIdle { vm.refreshCapabilities() }
-
-        compose.onNodeWithTag("record_permission_status").assertTextContains("麦克风 ✗", substring = true)
-        compose.onNodeWithTag("voice_button").assertIsNotEnabled()
+    @Test fun voiceEntryExplainsServiceIsNotConfiguredAndKeepsTextUsable() {
+        compose.onNodeWithTag("voice_unavailable_notice")
+            .assertTextContains("在线服务未配置", substring = true)
+        compose.onNodeWithTag("record_permission_status")
+            .assertTextContains("麦克风 ✓", substring = true)
         compose.onNodeWithTag("title_field").assertIsEnabled().performTextInput("纯文字事项")
         compose.onNodeWithTag("manual_create_button").assertIsEnabled().performClick()
         compose.onNodeWithTag("detail_screen").assertIsDisplayed()
     }
 
-    @Test fun missingBundledModelShowsExplicitOfflineErrorWithoutBlockingText() {
-        transcriber.ready = false
-        compose.runOnIdle { vm.refreshCapabilities() }
+    @Test fun voiceAddEntryOpensPanelWithNoticeAndCreatesNothing() {
+        compose.runOnIdle { vm.onCloseAdd() }
+        waitFor { !vm.state.value.addOpen }
 
-        compose.onNodeWithTag("voice_button").assertIsNotEnabled()
-        compose.onNodeWithTag("todo_list").performScrollToNode(
-            androidx.compose.ui.test.hasTestTag("input_error"),
-        )
+        compose.onNodeWithTag("voice_add_button").performClick()
+        waitFor { vm.state.value.addOpen }
+
+        compose.onNodeWithTag("voice_unavailable_notice")
+            .assertTextContains("在线服务未配置", substring = true)
         compose.onNodeWithTag("input_error")
-            .assertTextContains("随包离线识别模型缺失或不完整", substring = true)
-        compose.onNodeWithTag("todo_list").performScrollToNode(
-            androidx.compose.ui.test.hasTestTag("title_field"),
-        )
-        compose.onNodeWithTag("title_field").assertIsEnabled().performTextInput("模型缺失时仍可输入")
+            .assertTextContains("在线语音识别尚未配置", substring = true)
+        assertTrue(vm.state.value.items.isEmpty())
     }
 
     @Test fun manualCreationCarriesEditableTextThroughExistingDetailAndPersistsFields() {
@@ -205,42 +128,4 @@ class TodoInputFlowTest {
         }
     }
 
-    private class FakeAudioRecorder : AudioRecorder {
-        override val sampleRate = 16_000
-        var nextSamples = floatArrayOf(0.25f)
-        var active = false
-        var startCount = 0
-        var stopCount = 0
-        var cancelCount = 0
-
-        override fun start(): Boolean {
-            if (active) return false
-            active = true
-            startCount++
-            return true
-        }
-
-        override fun stop(): FloatArray {
-            if (!active) return FloatArray(0)
-            active = false
-            stopCount++
-            return nextSamples
-        }
-
-        override fun cancel() {
-            if (active) {
-                active = false
-                cancelCount++
-            }
-        }
-
-        override fun release() = cancel()
-    }
-
-    private class FakeTranscriber : OfflineTranscriber {
-        var ready = true
-        var result: TranscriptResult = TranscriptResult.Success("离线识别结果")
-        override fun isReady() = ready
-        override fun transcribe(samples: FloatArray, sampleRate: Int) = result
-    }
 }

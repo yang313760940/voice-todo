@@ -11,8 +11,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.data.*
 import com.voicetodo.domain.*
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
 import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.runner.RunWith
@@ -67,10 +65,7 @@ class TodoScreenTest {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
                     TodoViewModel(app, uc, repo, { ReminderCapabilities(true, true, true) },
-                        object : OfflineTranscriber {
-                            override fun isReady() = true
-                            override fun transcribe(samples: FloatArray, sampleRate: Int) = TranscriptResult.Success("From speech")
-                        }, clock, ZoneId.of("Asia/Shanghai")) as T
+                        clock, ZoneId.of("Asia/Shanghai")) as T
             })[TodoViewModel::class.java]
 
     @After fun teardown() {
@@ -274,11 +269,9 @@ class TodoScreenTest {
             .assertTextContains("2026-11-04 16:59", substring = true)
     }
 
-    @Test fun speechDraftCanBeEditedAndManualReminderFeedbackDistinguishesSchedulerFailure() {
+    @Test fun typedDraftCanBeEditedAndManualReminderFeedbackDistinguishesSchedulerFailure() {
         openAdd()
-        compose.runOnIdle { vm.transcribeSamplesForTest(floatArrayOf(0f), 16000) }
-        waitFor { vm.state.value.draftText == "From speech" }
-        compose.onNodeWithTag("title_field").performTextReplacement("Edited speech")
+        compose.onNodeWithTag("title_field").performTextInput("Edited speech")
         compose.onNodeWithTag("hour_field").performTextInput("18")
         compose.onNodeWithTag("minute_field").performTextInput("30")
         compose.onNodeWithTag("pick_time_button").performClick()

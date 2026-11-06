@@ -28,9 +28,6 @@ import com.voicetodo.domain.FrozenClock
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
-import com.voicetodo.speech.AudioRecorder
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -62,7 +59,6 @@ class TodoHomeTest {
     private val scheduler = RecordedScheduler()
     private val zone = ZoneId.of("Asia/Shanghai")
     private val today = LocalDate.of(2026, 11, 5)
-    private val recorder = FakeRecorder()
 
     @Before fun setUp() {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -77,14 +73,8 @@ class TodoHomeTest {
                     useCases = useCases,
                     storage = repo,
                     capabilities = { ReminderCapabilities(true, true, true) },
-                    transcriber = object : OfflineTranscriber {
-                        override fun isReady() = true
-                        override fun transcribe(samples: FloatArray, sampleRate: Int) =
-                            TranscriptResult.Success("语音识别结果")
-                    },
                     clock = clock,
                     zoneId = zone,
-                    recorder = recorder,
                 ) as T
         })[TodoViewModel::class.java]
         compose.setContent { MaterialTheme { TodoScreen(vm) } }
@@ -201,11 +191,11 @@ class TodoHomeTest {
         compose.onNodeWithText("清单内文字添加").assertExists()
 
         compose.onNodeWithTag("voice_add_button").performClick()
-        waitFor { vm.state.value.addOpen && vm.state.value.recordState == RecordState.Recording }
+        waitFor { vm.state.value.addOpen }
+        compose.onNodeWithTag("voice_unavailable_notice").assertExists()
         compose.onNodeWithTag("add_cancel_button").performClick()
-        waitFor { !vm.state.value.addOpen && vm.state.value.recordState == RecordState.Idle }
+        waitFor { !vm.state.value.addOpen }
         assertEquals(1, vm.state.value.items.size)
-        assertTrue(recorder.cancelCount > 0)
     }
 
     @Test fun detailListAndDateEditsAreVisibleInEveryAffectedView() {
@@ -265,26 +255,4 @@ class TodoHomeTest {
         }
     }
 
-    private class FakeRecorder : AudioRecorder {
-        override val sampleRate = 16_000
-        var active = false
-        var cancelCount = 0
-        override fun start(): Boolean {
-            if (active) return false
-            active = true
-            return true
-        }
-        override fun stop(): FloatArray {
-            if (!active) return FloatArray(0)
-            active = false
-            return floatArrayOf(0.1f)
-        }
-        override fun cancel() {
-            if (active) {
-                active = false
-                cancelCount++
-            }
-        }
-        override fun release() = cancel()
-    }
 }

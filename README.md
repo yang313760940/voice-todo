@@ -1,16 +1,16 @@
 # 语音提醒（VoiceTodo）
 
-原生 Kotlin + Jetpack Compose 的本地待办应用：点击录音 → 随包 sherpa-onnx 离线普通话转写 →
-可编辑标题 → 手动创建，或由用户自填的 OpenAI 兼容服务整理成一组可编辑草稿 →
+原生 Kotlin + Jetpack Compose 的本地待办应用：文字输入 → 可编辑标题 → 手动创建，
+或由用户自填的 OpenAI 兼容服务整理成一组可编辑草稿 →
 确认后保存事项 → 真实 AlarmManager 系统闹钟触发通知与响铃 → 关闭。
 
 - minSdk 29（Android 10+），targetSdk 34。
 - 底部导航包含待办、四象限、番茄、我的；“我的”集中提供提醒系统设置入口、
   番茄计时设置、外观与字体、语音与 AI、权限状态、数据管理与回收站和关于页。
 - 外观支持浅色、深色、跟随系统与小/标准/大三档字体，修改即时生效并持久化。
-- 离线识别模型与原生库**随安装包**交付，首次启动断网可用。
+- 本版已移除随包离线识别模型与原生库；语音入口在在线识别接入前显示“在线服务未配置”。
 - 在线 AI 只在用户主动点“用在线 AI 整理”时发送当前文字、当前日期时间和时区；
-  不发送录音、历史事项或全部待办。未配置 AI 时，手动创建和离线识别仍可用。
+  不发送录音、历史事项或全部待办。未配置 AI 时，手动文字创建仍可用。
 - AI 服务地址、模型和密钥在“高级设置”中自填；密钥用 Android Keystore 加密保存，
   不进入日志、备份或源码。远程地址必须使用 HTTPS，仅本机调试允许 `http://127.0.0.1`。
 - AI 可一次返回多条草稿；每条可独立编辑、删除或修改象限，确认前不创建事项、不安排闹钟。
@@ -18,22 +18,6 @@
 - 草稿可带每天、每周多选星期或每月指定日期的重复建议，并可修改重复时刻；保存后使用现有重复实例引擎。
 - 删除事项立即撤销未来提醒并进入 30 天回收站；恢复保留原属性，过去提醒清除，未来提醒重新安排。
 - 删除重复实例可选择仅本次或本次及以后；已完成历史与专注记录保留。
-
-## 获取随包二进制（首次构建前）
-
-模型与 AAR 体积大、不入 git，按 `docs/offline-toolchain.md` 中的 URL 与 SHA-256 取得：
-
-```bash
-# 1) 官方 sherpa-onnx AAR（47.81 MB）
-curl -L --ssl-no-revoke -o app/libs/sherpa-onnx-1.13.8.aar \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar"
-
-# 2) 普通话模型（78.04 MB）+ 词表，放 assets/sherpa/
-curl -L --ssl-no-revoke -C - -o app/src/main/assets/sherpa/model.int8.onnx \
-  "https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-small-2024-03-09/resolve/main/model.int8.onnx"
-curl -L --ssl-no-revoke -o app/src/main/assets/sherpa/tokens.txt \
-  "https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-small-2024-03-09/resolve/main/tokens.txt"
-```
 
 ## 构建与安装
 
@@ -54,14 +38,14 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:connectedDebugAndroidTest  # 设备仪器测试（需模拟器/真机 + 权限）
 ```
 
-仪器测试覆盖：断网真实识别、真实系统闹钟登记、保存/取消行为、端到端离线→闹钟投递；
+仪器测试覆盖：真实系统闹钟登记、保存/取消行为、端到端保存→闹钟投递；
 另含 Android Keystore 配置加密、设备本机 HTTP 回环绕行和 AI 请求闭环验证。
 历史证据见 `docs/evidence-ticket2.md`。
 
 ## 权限与提醒就绪
 
 - 麦克风 `RECORD_AUDIO`、通知 `POST_NOTIFICATIONS`（13+）运行时申请。
-- `INTERNET` 仅用于用户主动发起的在线 AI 整理；语音识别始终离线。
+- `INTERNET` 用于用户主动发起的在线 AI 整理；后续在线语音识别接入后同样只在用户主动录音时联网。
 - 精确闹钟 `SCHEDULE_EXACT_ALARM`（12+）为特殊访问，未授予时界面如实显示“未就绪”，
   保存事项但不谎称已安排（`TodoUseCases` 与 `SystemReminderScheduler.capabilities()` 分别反馈）。
 - “我的 → 权限与提醒检查”分别显示事项保存、系统精确调度、通知运行时授权、应用通知总开关、

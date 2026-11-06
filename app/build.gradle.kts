@@ -47,14 +47,6 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
-        // 让安装时把 .so 解压到 lib 目录，避免 dlopen 找不到（x86_64 模拟器验证）
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
-    androidResources {
-        // 模型文件已是压缩格式，避免二次压缩导致包体膨胀与解压开销
-        noCompress += listOf("onnx")
     }
     testOptions {
         unitTests {
@@ -93,9 +85,6 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
-
-    // 随包 sherpa-onnx（官方发布 AAR，见 app/libs 与 docs/offline-toolchain.md）
-    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
 
     // 单元测试
     testImplementation("junit:junit:4.13.2")

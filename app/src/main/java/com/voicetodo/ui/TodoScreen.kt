@@ -526,22 +526,12 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
         }
         item { StorageStatus(state, vm::onRetryStorage) }
         item {
-            Button(onClick = vm::onToggleRecord, modifier = Modifier.fillMaxWidth().testTag("voice_button"),
-                enabled = enabled && state.recordState != RecordState.Transcribing &&
-                    (state.recordState == RecordState.Recording ||
-                        (state.speechReady && state.capabilities?.canRecordAudio == true))) {
-                Text(when (state.recordState) {
-                    RecordState.Idle -> if (state.draftText.isBlank()) "开始录音" else "重新录音"
-                    RecordState.Recording -> "结束录音"
-                    RecordState.Transcribing -> "识别中…"
-                })
-            }
-            if (state.recordState != RecordState.Idle) {
-                TextButton(onClick = vm::onCancelRecording, enabled = enabled,
-                    modifier = Modifier.testTag("cancel_record_button")) {
-                    Text(if (state.recordState == RecordState.Recording) "取消录音" else "取消识别")
-                }
-            }
+            Text(
+                "在线服务未配置；请先用文字输入",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("voice_unavailable_notice"),
+            )
         }
         item {
             OutlinedTextField(value = state.draftText, onValueChange = vm::onDraftTextChange,
@@ -554,7 +544,7 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("在线 AI 整理（可选）", fontWeight = FontWeight.Medium)
                     Text(
-                        "语音识别始终在本机离线完成。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
+                        "语音识别将在接入在线服务后启用。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
                             "不发送录音、历史事项或其他待办。",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -611,14 +601,14 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
         }
         item {
             Button(onClick = vm::onOpenManualCreate,
-                enabled = enabled && state.recordState == RecordState.Idle,
+                enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("manual_create_button")) {
                 Text("填写完整详情并创建")
             }
-            Button(onClick = vm::onSave, enabled = enabled && state.recordState == RecordState.Idle,
+            Button(onClick = vm::onSave, enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("save_button")) { Text("保存并安排提醒") }
             OutlinedButton(onClick = vm::onSaveWithoutReminder,
-                enabled = enabled && state.recordState == RecordState.Idle,
+                enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("save_without_reminder_button")) { Text("不设提醒直接保存") }
             TextButton(onClick = vm::onCancel, enabled = enabled,
                 modifier = Modifier.testTag("cancel_button")) { Text("取消草稿") }

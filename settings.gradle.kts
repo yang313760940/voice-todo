@@ -17,8 +17,6 @@ dependencyResolutionManagement {
         maven { url = uri("https://maven.aliyun.com/repository/public") }
         google()
         mavenCentral()
-        // 随包本地 AAR（sherpa-onnx 官方发布物）以 libs 目录形式接入
-        flatDir { dirs("app/libs") }
     }
 }
 

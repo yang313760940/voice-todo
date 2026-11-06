@@ -34,20 +34,12 @@ import com.voicetodo.domain.RecurringEditScope
 import com.voicetodo.domain.MissedReminder
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
-import com.voicetodo.speech.AudioRecorder
-import com.voicetodo.speech.OfflineTranscriber
-import com.voicetodo.speech.PcmRecorder
-import com.voicetodo.speech.SherpaOfflineTranscriber
-import com.voicetodo.speech.TranscriptResult
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
@@ -61,9 +53,6 @@ import java.time.LocalDate
 import java.time.format.DateTimeParseException
 import java.time.DayOfWeek
 import java.util.UUID
-
-/** 录音状态机。 */
-enum class RecordState { Idle, Recording, Transcribing }
 
 enum class DetailField { Plan, Due, Reminder }
 
@@ -168,8 +157,6 @@ data class UiState(
     val busy: Boolean = false,
     val storageError: String? = null,
     val now: Instant = Instant.EPOCH,
-    val recordState: RecordState = RecordState.Idle,
-    val speechReady: Boolean = true,
     val draftText: String = "",
     val draftHasTime: Boolean = false,
     val draftTime: Instant? = null,
@@ -194,18 +181,16 @@ data class UiState(
 }
 
 /**
- * 单页待办 ViewModel：录音 → 离线转写 → 可编辑标题 → 手选时间 → 保存/取消。
- * 通过 [VoiceTodoApp.useCases] 统一入口持久化并调度系统闹钟。
+ * 单页待办 ViewModel：可编辑标题 → 手选时间 → 保存/取消。
+ * 语音入口在接入在线识别前只做提示；通过 [VoiceTodoApp.useCases] 统一入口持久化并调度系统闹钟。
  */
 class TodoViewModel @JvmOverloads constructor(
     app: Application,
     private val useCases: TodoUseCases = (app as VoiceTodoApp).useCases,
     private val storage: RoomTodoRepository = (app as VoiceTodoApp).repository,
     private val capabilities: () -> ReminderCapabilities = { (app as VoiceTodoApp).scheduler.capabilities() },
-    private val transcriber: OfflineTranscriber = SherpaOfflineTranscriber(app),
     private val clock: Clock = SystemClock(),
     zoneId: ZoneId? = null,
-    private val recorder: AudioRecorder = PcmRecorder(),
     private val aiSettingsStore: AiSettingsStore = EncryptedAiSettingsStore(app),
     private val aiClient: AiAssistClient = OpenAiCompatibleClient(),
     private val reconcileReminders: suspend () -> Unit = {
@@ -215,10 +200,6 @@ class TodoViewModel @JvmOverloads constructor(
     private val configuredZoneId = zoneId
     val zoneId: ZoneId get() = configuredZoneId ?: ZoneId.systemDefault()
     private val operations = Mutex()
-    private var transcriptionJob: Job? = null
-    private var speechGeneration = 0L
-    private var draftRevision = 0L
-    private var recordingStartRevision = 0L
     private var aiJob: Job? = null
     private var aiGeneration = 0L
 
@@ -226,12 +207,9 @@ class TodoViewModel @JvmOverloads constructor(
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
-        val speechReady = transcriber.isReady()
         _state.value = _state.value.copy(
             capabilities = capabilities(),
             now = clock.now(),
-            speechReady = speechReady,
-            inputError = if (!speechReady) "随包离线识别模型缺失或不完整；仍可使用文字输入" else null,
             aiConfigured = runCatching { aiSettingsStore.load() }.getOrNull() != null,
         )
         viewModelScope.launch {
@@ -350,14 +328,16 @@ class TodoViewModel @JvmOverloads constructor(
             inputError = null,
             message = null,
         )
-        if (startVoice) onToggleRecord()
+        if (startVoice) {
+            _state.value = _state.value.copy(
+                inputError = "在线语音识别尚未配置；请先用文字输入",
+            )
+        }
     }
 
     fun onCloseAdd() {
         if (_state.value.busy) return
-        onCancelRecording()
         invalidateAiRequest()
-        draftRevision++
         _state.value = _state.value.copy(
             addOpen = false,
             addTargetListId = null,
@@ -397,123 +377,17 @@ class TodoViewModel @JvmOverloads constructor(
     fun onRetryStorage() = action { storage.initialize(); reload() }
 
     fun refreshCapabilities() {
-        val ready = transcriber.isReady()
-        _state.value = _state.value.copy(
-            capabilities = capabilities(),
-            speechReady = ready,
-            inputError = if (!ready) "随包离线识别模型缺失或不完整；仍可使用文字输入"
-                else _state.value.inputError?.takeUnless { it.startsWith("随包离线识别模型") },
-        )
-    }
-
-    fun onToggleRecord() {
-        when (_state.value.recordState) {
-            RecordState.Idle -> {
-                invalidateAiRequest()
-                if (_state.value.capabilities?.canRecordAudio != true) {
-                    _state.value = _state.value.copy(
-                        inputError = "未授予麦克风权限；仍可使用文字输入",
-                    )
-                    return
-                }
-                if (!transcriber.isReady()) {
-                    _state.value = _state.value.copy(
-                        speechReady = false,
-                        inputError = "随包离线识别模型缺失或不完整；仍可使用文字输入",
-                    )
-                    return
-                }
-                if (!recorder.start()) {
-                    _state.value = _state.value.copy(
-                        inputError = "麦克风正被占用或不可用；仍可使用文字输入",
-                    )
-                } else {
-                    recordingStartRevision = draftRevision
-                    _state.value = _state.value.copy(
-                        recordState = RecordState.Recording,
-                        inputError = null,
-                        message = null,
-                    )
-                }
-            }
-            RecordState.Recording -> stopAndTranscribe()
-            RecordState.Transcribing -> Unit
-        }
-    }
-
-    private fun stopAndTranscribe() {
-        val samples = recorder.stop()
-        beginTranscription(samples, recorder.sampleRate, recordingStartRevision)
-    }
-
-    private fun beginTranscription(samples: FloatArray, sampleRate: Int, sourceRevision: Long) {
-        val generation = ++speechGeneration
-        _state.value = _state.value.copy(recordState = RecordState.Transcribing, inputError = null)
-        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                if (samples.isEmpty()) {
-                    _state.value = _state.value.copy(
-                        recordState = RecordState.Idle,
-                        inputError = "没有录到音频；已有文字已保留",
-                    )
-                    return@launch
-                }
-                val result = withContext(Dispatchers.Default) {
-                    transcriber.transcribe(samples, sampleRate)
-                }
-                if (generation != speechGeneration) return@launch
-                when (result) {
-                    is TranscriptResult.Success -> {
-                        val userEditedDuringRecording = draftRevision != sourceRevision
-                        if (!userEditedDuringRecording) draftRevision++
-                        _state.value = _state.value.copy(
-                            recordState = RecordState.Idle,
-                            draftText = if (userEditedDuringRecording) _state.value.draftText else result.text,
-                            inputError = null,
-                            message = if (userEditedDuringRecording) "识别完成；已保留录音期间编辑的文字" else null,
-                        )
-                    }
-                    is TranscriptResult.Failure ->
-                        _state.value = _state.value.copy(
-                            recordState = RecordState.Idle,
-                            inputError = "${result.message}；已有文字已保留",
-                        )
-                }
-            } finally {
-                if (generation == speechGeneration) transcriptionJob = null
-            }
-        }
-        transcriptionJob = job
-        // 即使协程在真正开始前就被取消，也必须释放本次临时采样。
-        job.invokeOnCompletion { samples.fill(0f) }
-        job.start()
+        _state.value = _state.value.copy(capabilities = capabilities())
     }
 
     fun onDraftTextChange(text: String) {
         invalidateAiRequest()
-        draftRevision++
         _state.value = _state.value.copy(draftText = text, inputError = null)
-    }
-
-    /** 只取消本次录音/识别，保留已经取得或手工输入的文字。 */
-    fun onCancelRecording() {
-        when (_state.value.recordState) {
-            RecordState.Idle -> return
-            RecordState.Recording -> recorder.cancel()
-            RecordState.Transcribing -> transcriptionJob?.cancel()
-        }
-        speechGeneration++
-        transcriptionJob = null
-        _state.value = _state.value.copy(recordState = RecordState.Idle, inputError = null)
     }
 
     /** 把当前识别文字带入已有事项详情，由用户补全字段后创建。 */
     fun onOpenManualCreate() {
         val s = _state.value
-        if (s.recordState != RecordState.Idle) {
-            _state.value = s.copy(inputError = "请先结束或取消当前录音识别")
-            return
-        }
         if (s.draftText.isBlank()) {
             _state.value = s.copy(inputError = "请先输入或识别事项文字")
             return
@@ -538,10 +412,6 @@ class TodoViewModel @JvmOverloads constructor(
 
     private fun save(withoutReminder: Boolean) {
         val s = _state.value
-        if (s.recordState != RecordState.Idle) {
-            _state.value = s.copy(inputError = "请先结束或取消当前录音识别")
-            return
-        }
         val at = if (withoutReminder) null else s.draftTime
         if (!withoutReminder && (!s.draftHasTime || at == null)) {
             _state.value = s.copy(message = "请先选择提醒时间")
@@ -635,10 +505,6 @@ class TodoViewModel @JvmOverloads constructor(
     fun onOrganizeWithAi() {
         val current = _state.value
         if (current.aiBusy) return
-        if (current.recordState != RecordState.Idle) {
-            _state.value = current.copy(inputError = "请先结束或取消当前录音识别")
-            return
-        }
         val settings = runCatching { aiSettingsStore.load() }.getOrNull()
         if (settings == null) {
             _state.value = current.copy(
@@ -1029,7 +895,6 @@ class TodoViewModel @JvmOverloads constructor(
                         edit.dueAt,
                         listId = edit.listId,
                     )
-                    draftRevision++
                     _state.value = _state.value.copy(
                         addOpen = false,
                         addTargetListId = null,
@@ -1154,17 +1019,9 @@ class TodoViewModel @JvmOverloads constructor(
         ReminderOutcome.NotReady -> "事项已保存，但提醒未就绪（缺精确闹钟权限或系统限制）"
     }
 
-    /** 供仪器测试注入固定音频并识别（跳过麦克风）。 */
-    fun transcribeSamplesForTest(samples: FloatArray, sampleRate: Int) {
-        beginTranscription(samples, sampleRate, draftRevision)
-    }
-
     override fun onCleared() {
-        transcriptionJob?.cancel()
-        speechGeneration++
         aiGeneration++
         aiJob?.cancel()
-        recorder.release()
         super.onCleared()
     }
 }

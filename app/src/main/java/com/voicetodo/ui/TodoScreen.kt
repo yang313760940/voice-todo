@@ -170,7 +170,7 @@ fun TodoScreen(vm: TodoViewModel) {
             )
         }
         if (state.speechConsentVisible) {
-            SpeechConsentDialog(vm)
+            SpeechConsentDialog(vm, state.voiceProvider?.label ?: "豆包")
         }
     }
 }
@@ -474,7 +474,7 @@ private fun VoiceCapturePanel(vm: TodoViewModel, state: UiState, enabled: Boolea
                         Column(Modifier.weight(1f)) {
                             Text("语音添加", style = MaterialTheme.typography.titleLarge)
                             Text(
-                                "豆包在线转写 · 录音不会保存到本机",
+                                "${state.voiceProvider?.label ?: "在线"}转写 · 录音不会保存到本机",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -655,13 +655,13 @@ private fun formatVoiceDuration(elapsedMs: Long): String {
 }
 
 @Composable
-private fun SpeechConsentDialog(vm: TodoViewModel) {
+private fun SpeechConsentDialog(vm: TodoViewModel, providerLabel: String) {
     AlertDialog(
         onDismissRequest = vm::onCancelSpeechConsent,
-        title = { Text("录音和文字将上传到豆包") },
+        title = { Text("录音和文字将上传到$providerLabel") },
         text = {
             Text(
-                "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到豆包语音服务，" +
+                "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到${providerLabel}语音服务，" +
                     "用于转写当前事项。音频不会保存到本机，也不会发送到其他服务。",
             )
         },
@@ -916,7 +916,8 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("在线 AI 整理（可选）", fontWeight = FontWeight.Medium)
                     Text(
-                        "语音识别由豆包在线完成。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
+                        "语音识别与事项整理使用你在设置中选择的同一家服务。" +
+                            "在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
                             "不发送录音、历史事项或其他待办。",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -993,10 +994,13 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
         if (state.speechConsentVisible) {
             AlertDialog(
                 onDismissRequest = vm::onCancelSpeechConsent,
-                title = { Text("录音和文字将上传到豆包") },
+                title = {
+                    Text("录音和文字将上传到${state.voiceProvider?.label ?: "所选服务"}")
+                },
                 text = {
                     Text(
-                        "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到豆包语音服务，" +
+                        "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到" +
+                            "${state.voiceProvider?.label ?: "所选服务"}语音服务，" +
                             "用于转写当前事项。音频不会保存到本机，也不会发送到其他服务。",
                     )
                 },
@@ -1025,11 +1029,14 @@ private fun SpeechCaptureCard(vm: TodoViewModel, state: UiState, enabled: Boolea
             Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("语音识别（豆包在线）", fontWeight = FontWeight.Medium)
+            Text(
+                "语音识别（${state.voiceProvider?.label ?: "未选择服务"}在线）",
+                fontWeight = FontWeight.Medium,
+            )
             when {
                 !state.speechConfigured -> {
                     Text(
-                        "语音识别未配置；请先在高级设置中填写豆包语音 API Key。",
+                        "语音识别未配置；请先在设置中选择豆包或阿里云并填写凭据。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("voice_unavailable_notice"),
@@ -1044,7 +1051,7 @@ private fun SpeechCaptureCard(vm: TodoViewModel, state: UiState, enabled: Boolea
                     state.speechState == SpeechUiState.Recording -> {
                     Text(
                         if (state.speechState == SpeechUiState.Connecting) {
-                            "正在连接豆包，准备录音…"
+                            "正在连接${state.voiceProvider?.label ?: "语音服务"}，准备录音…"
                         } else {
                             "正在聆听；说完后点“结束录音”。"
                         },

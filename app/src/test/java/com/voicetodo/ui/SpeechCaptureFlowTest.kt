@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -31,12 +32,15 @@ import com.voicetodo.domain.FrozenClock
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.speech.DoubaoSpeechSettings
+import com.voicetodo.speech.DoubaoVoiceCredentials
 import com.voicetodo.speech.FakeSpeechRecorder
 import com.voicetodo.speech.FakeSpeechRecorderFactory
 import com.voicetodo.speech.FakeSpeechStream
 import com.voicetodo.speech.FakeSpeechStreamFactory
 import com.voicetodo.speech.MemorySpeechSettingsStore
 import com.voicetodo.speech.SpeechEvent
+import com.voicetodo.speech.VoiceProvider
+import com.voicetodo.speech.VoiceServiceSettings
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -165,12 +169,63 @@ class SpeechCaptureFlowTest {
         assertFalse(recorder.started)
         assertFalse(stream.started)
         assertEquals(SpeechUiState.Idle, vm.state.value.speechState)
-        assertTrue(vm.state.value.inputError!!.contains("API Key"))
+        assertTrue(vm.state.value.inputError!!.contains("未配置"))
+    }
+
+    @Test
+    fun `unconfigured voice panel still allows pencil text and saving to inbox`() {
+        settingsStore.settings = null
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+
+        compose.onNodeWithTag("voice_mic_button").performClick()
+        waitFor { vm.state.value.addOpen && vm.state.value.voicePanelOpen }
+        compose.onNodeWithTag("voice_open_settings").assertExists()
+        compose.onNodeWithTag("voice_edit_pen").performClick()
+        compose.onNodeWithTag("voice_edit_text").performTextReplacement("未配置也能记一条")
+        compose.waitForIdle()
+        assertEquals("未配置也能记一条", vm.state.value.draftText)
+        compose.onNodeWithTag("voice_save_inbox_button").performScrollTo().performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertEquals("未配置也能记一条", saved.title)
+        assertNull(saved.listId)
+        assertTrue(saved.reminders.isEmpty())
+    }
+
+    @Test
+    fun `unconfigured voice panel can open settings and return to the panel`() {
+        settingsStore.settings = null
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+
+        compose.onNodeWithTag("voice_mic_button").performClick()
+        waitFor { vm.state.value.addOpen && vm.state.value.voicePanelOpen }
+        compose.onNodeWithTag("voice_open_settings").performClick()
+        waitFor { vm.state.value.aiSettingsForm != null }
+        compose.onNodeWithTag("ai_settings_screen").assertExists()
+
+        compose.onNodeWithTag("ai_settings_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("ai_settings_cancel"),
+        )
+        compose.onNodeWithTag("ai_settings_cancel").performClick()
+        waitFor { vm.state.value.aiSettingsForm == null }
+        assertTrue(vm.state.value.voicePanelOpen)
+        compose.onNodeWithTag("voice_panel").assertExists()
+    }
+
+    @Test
+    fun `selected recognition language is passed to the speech stream`() {
+        settingsStore.settings = configured().copy(language = "en-US")
+
+        vm.onOpenAdd(startVoice = true)
+        idle()
+
+        assertEquals("en-US", stream.language)
     }
 
     @Test
     fun `first use asks for upload consent before recording`() {
-        settingsStore.settings = DoubaoSpeechSettings("test-key", uploadAcknowledged = false)
+        settingsStore.settings = configured(acknowledged = false)
 
         vm.onOpenAdd(startVoice = true)
         idle()
@@ -180,7 +235,7 @@ class SpeechCaptureFlowTest {
         vm.onConfirmSpeechConsent()
         idle()
         assertFalse(vm.state.value.speechConsentVisible)
-        assertTrue(settingsStore.settings!!.uploadAcknowledged)
+        assertTrue(settingsStore.settings!!.hasUploadConsent())
         assertTrue(recorder.started)
     }
 
@@ -251,7 +306,7 @@ class SpeechCaptureFlowTest {
 
         assertEquals(
             DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
-            settingsStore.settings!!.resourceId,
+            settingsStore.settings!!.doubao.resourceId,
         )
         assertEquals(SpeechUiState.Idle, vm.state.value.speechState)
         assertEquals(1, streamFactory.openCalls)
@@ -699,9 +754,19 @@ class SpeechCaptureFlowTest {
         waitFor { vm.state.value.aiDrafts.isNotEmpty() && vm.state.value.autoSaveDeadline != null }
     }
 
-    private fun configured() = DoubaoSpeechSettings(
-        apiKey = "test-key",
-        uploadAcknowledged = true,
+    private fun configured(acknowledged: Boolean = true) = VoiceServiceSettings(
+        provider = VoiceProvider.Doubao,
+        doubao = DoubaoVoiceCredentials(
+            speechApiKey = "test-key",
+            textApiKey = "test" + "-ark-key",
+            textModel = "test-model",
+        ),
+        uploadConsentVersion = if (acknowledged) {
+            VoiceServiceSettings.UPLOAD_CONSENT_VERSION
+        } else {
+            0
+        },
+        acknowledgedProviders = if (acknowledged) setOf(VoiceProvider.Doubao) else emptySet(),
     )
 
     private fun idle() {

@@ -37,7 +37,9 @@ import com.voicetodo.domain.RecurringEditScope
 import com.voicetodo.domain.MissedReminder
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
+import com.voicetodo.speech.AliyunVoiceCredentials
 import com.voicetodo.speech.DefaultSpeechRecorderFactory
+import com.voicetodo.speech.DoubaoVoiceCredentials
 import com.voicetodo.speech.DoubaoSpeechSettings
 import com.voicetodo.speech.EncryptedSpeechSettingsStore
 import com.voicetodo.speech.OkHttpSpeechStreamFactory
@@ -47,6 +49,9 @@ import com.voicetodo.speech.SpeechRecorderFactory
 import com.voicetodo.speech.SpeechSettingsStore
 import com.voicetodo.speech.SpeechStream
 import com.voicetodo.speech.SpeechStreamFactory
+import com.voicetodo.speech.VoiceLanguages
+import com.voicetodo.speech.VoiceProvider
+import com.voicetodo.speech.VoiceServiceSettings
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,25 +78,38 @@ enum class DetailField { Plan, Due, Reminder }
 
 enum class ReminderDraftKind { Specified, Relative }
 
-enum class AiSettingsField { BaseUrl, Model, ApiKey }
-
-enum class SpeechSettingsField { ApiKey, ResourceId }
+enum class VoiceSettingsField {
+    DoubaoSpeechApiKey,
+    DoubaoResourceId,
+    DoubaoTextApiKey,
+    DoubaoTextModel,
+    AliyunApiKey,
+    AliyunTextModel,
+}
 
 enum class SpeechUiState { Idle, Connecting, Recording, Finishing, Failed }
 
 data class AiSettingsForm(
-    val baseUrl: String = "",
-    val model: String = "",
-    val apiKey: String = "",
-    val speechApiKey: String = "",
-    val speechResourceId: String = DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+    val provider: VoiceProvider? = null,
+    val language: String = VoiceLanguages.Mandarin.code,
+    val doubaoSpeechApiKey: String = "",
+    val doubaoSpeechResourceId: String = DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+    val doubaoTextApiKey: String = "",
+    val doubaoTextModel: String = "",
+    val aliyunApiKey: String = "",
+    val aliyunTextModel: String = AliyunVoiceCredentials.DEFAULT_TEXT_MODEL,
+    val legacyBaseUrl: String = "",
+    val legacyModel: String = "",
+    val legacyConfigured: Boolean = false,
     val speechError: String? = null,
-    val error: String? = null,
 ) {
     override fun toString(): String =
-        "AiSettingsForm(baseUrl=$baseUrl, model=$model, apiKey=***, " +
-            "speechApiKey=***, speechResourceId=$speechResourceId, " +
-            "speechError=$speechError, error=$error)"
+        "AiSettingsForm(provider=$provider, language=$language, " +
+            "doubaoSpeechApiKey=***, doubaoSpeechResourceId=$doubaoSpeechResourceId, " +
+            "doubaoTextApiKey=***, doubaoTextModel=$doubaoTextModel, " +
+            "aliyunApiKey=***, aliyunTextModel=$aliyunTextModel, " +
+            "legacyBaseUrl=$legacyBaseUrl, legacyModel=$legacyModel, " +
+            "legacyConfigured=$legacyConfigured, speechError=$speechError)"
 }
 
 enum class RepeatDraft { None, Daily, Weekly, Monthly }
@@ -208,6 +226,8 @@ data class UiState(
     val capabilities: ReminderCapabilities? = null,
     val aiConfigured: Boolean = false,
     val aiSettingsForm: AiSettingsForm? = null,
+    val voiceProvider: VoiceProvider? = null,
+    val voiceLanguage: String = VoiceLanguages.Mandarin.code,
     val aiDrafts: List<AiDraft> = emptyList(),
     val selectedAiDraftId: String? = null,
     val aiBusy: Boolean = false,
@@ -292,11 +312,14 @@ class TodoViewModel @JvmOverloads constructor(
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
+        val voiceSettings = runCatching { speechSettingsStore.load() }.getOrNull()
         _state.value = _state.value.copy(
             capabilities = capabilities(),
             now = clock.now(),
-            aiConfigured = runCatching { aiSettingsStore.load() }.getOrNull() != null,
-            speechConfigured = runCatching { speechSettingsStore.load() }.getOrNull() != null,
+            aiConfigured = voiceSettings?.organizerSettings() != null,
+            speechConfigured = voiceSettings?.speechConfigured() == true,
+            voiceProvider = voiceSettings?.provider,
+            voiceLanguage = voiceSettings?.language ?: VoiceLanguages.Mandarin.code,
         )
         viewModelScope.launch {
             storage.state.collect { status ->
@@ -421,7 +444,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onOpenAdd(startVoice: Boolean = false) {
         val current = _state.value
         if (current.busy || current.addOpen) return
-        val speech = runCatching { speechSettingsStore.load() }.getOrNull()
+        val voice = runCatching { speechSettingsStore.load() }.getOrNull()
         val target = (current.selectedView as? TodoView.CustomList)?.listId
         _state.value = current.copy(
             addOpen = true,
@@ -432,7 +455,10 @@ class TodoViewModel @JvmOverloads constructor(
             draftTime = null,
             inputError = null,
             message = null,
-            speechConfigured = speech != null,
+            speechConfigured = voice?.speechConfigured() == true,
+            aiConfigured = voice?.organizerSettings() != null,
+            voiceProvider = voice?.provider,
+            voiceLanguage = voice?.language ?: VoiceLanguages.Mandarin.code,
             speechState = SpeechUiState.Idle,
             speechPartialText = "",
             speechConsentVisible = false,
@@ -531,20 +557,34 @@ class TodoViewModel @JvmOverloads constructor(
         val retryingAfterFailure = current.speechState == SpeechUiState.Failed
         if (retryingAfterFailure) autoSaveSuppressed = true
         val settings = runCatching { speechSettingsStore.load() }.getOrNull()
-        if (settings == null) {
+        if (settings == null || !settings.speechConfigured()) {
             _state.value = current.copy(
                 speechConfigured = false,
-                inputError = "语音识别未配置；请先在高级设置中填写豆包语音 API Key",
+                voiceProvider = settings?.provider,
+                voiceLanguage = settings?.language ?: VoiceLanguages.Mandarin.code,
+                inputError = "语音识别未配置；请先选择豆包或阿里云并填写凭据",
+            )
+            return
+        }
+        if (settings.provider != VoiceProvider.Doubao) {
+            _state.value = current.copy(
+                speechConfigured = true,
+                voiceProvider = settings.provider,
+                voiceLanguage = settings.language,
+                inputError = "阿里云语音识别尚未接入；请先改用豆包，或点小笔直接输入",
             )
             return
         }
         _state.value = current.copy(
             speechConfigured = true,
+            voiceProvider = settings.provider,
+            voiceLanguage = settings.language,
+            aiConfigured = settings.organizerSettings() != null,
             inputError = null,
             message = null,
             voiceDiscardConfirmVisible = false,
         )
-        if (!settings.uploadAcknowledged) {
+        if (!settings.hasUploadConsent()) {
             _state.value = _state.value.copy(speechConsentVisible = true)
             return
         }
@@ -553,15 +593,15 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onConfirmSpeechConsent() {
         val settings = runCatching { speechSettingsStore.load() }.getOrNull()
-        if (settings == null) {
+        if (settings == null || !settings.speechConfigured()) {
             _state.value = _state.value.copy(
                 speechConsentVisible = false,
                 speechConfigured = false,
-                inputError = "语音识别未配置；请先在高级设置中填写豆包语音 API Key",
+                inputError = "语音识别未配置；请先选择豆包或阿里云并填写凭据",
             )
             return
         }
-        val acknowledged = settings.copy(uploadAcknowledged = true)
+        val acknowledged = settings.withUploadConsent()
         try {
             speechSettingsStore.save(acknowledged)
         } catch (e: Exception) {
@@ -583,7 +623,7 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     private fun startSpeechCapture(
-        settings: DoubaoSpeechSettings,
+        settings: VoiceServiceSettings,
         suppressAutoSave: Boolean = false,
     ) {
         if (!hasRecordAudioPermission()) {
@@ -593,7 +633,15 @@ class TodoViewModel @JvmOverloads constructor(
             )
             return
         }
-        val stream = speechStreamFactory.open(settings)
+        val doubao = settings.doubaoSpeechSettings()
+        if (doubao == null) {
+            _state.value = _state.value.copy(
+                speechState = SpeechUiState.Failed,
+                inputError = "豆包语音凭据不完整；请到设置检查 API Key 与资源 ID",
+            )
+            return
+        }
+        val stream = speechStreamFactory.open(doubao)
         val recorder = speechRecorderFactory.create()
         cancelSpeechResources()
         cancelAutoSave()
@@ -628,7 +676,7 @@ class TodoViewModel @JvmOverloads constructor(
                 if (generation == speechGeneration) onSpeechEvent(event)
             }
         }
-        stream.start("zh-CN")
+        stream.start(settings.language)
         val started = recorder.start { chunk ->
             if (generation == speechGeneration) {
                 stream.pushPcm(chunk)
@@ -950,15 +998,15 @@ class TodoViewModel @JvmOverloads constructor(
     /** 403 时由用户手动切换资源；不自动重试，也不把失败当成功。 */
     fun onSwitchToLegacySpeechResource() {
         val settings = runCatching { speechSettingsStore.load() }.getOrNull()
-        if (settings == null) {
+        if (settings == null || settings.provider != VoiceProvider.Doubao) {
             _state.value = _state.value.copy(
-                inputError = "语音识别未配置；请先在高级设置中填写豆包语音 API Key",
+                inputError = "语音识别未配置；请先在设置中填写豆包语音 API Key",
             )
             return
         }
         try {
             speechSettingsStore.save(
-                settings.copy(resourceId = DoubaoSpeechSettings.LEGACY_RESOURCE_ID),
+                settings.withDoubaoResource(DoubaoSpeechSettings.LEGACY_RESOURCE_ID),
             )
             _state.value = _state.value.copy(
                 speechConfigured = true,
@@ -966,7 +1014,7 @@ class TodoViewModel @JvmOverloads constructor(
                 inputError = null,
                 message = "已切换到 1.0 小时版；请重新录音",
                 aiSettingsForm = _state.value.aiSettingsForm?.copy(
-                    speechResourceId = DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
+                    doubaoSpeechResourceId = DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
                     speechError = null,
                 ),
             )
@@ -1079,55 +1127,86 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onOpenAiSettings() {
-        val saved = runCatching { aiSettingsStore.load() }.getOrNull()
-        val speech = runCatching { speechSettingsStore.load() }.getOrNull()
+        val voice = runCatching { speechSettingsStore.load() }.getOrNull()
         _state.value = _state.value.copy(
-            aiSettingsForm = AiSettingsForm(
-                baseUrl = saved?.baseUrl.orEmpty(),
-                model = saved?.model.orEmpty(),
-                apiKey = saved?.apiKey.orEmpty(),
-                speechApiKey = speech?.apiKey.orEmpty(),
-                speechResourceId = speech?.resourceId
-                    ?: DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
-            ),
-            aiConfigured = saved != null,
-            speechConfigured = speech != null,
+            aiSettingsForm = voiceSettingsForm(voice),
+            aiConfigured = voice?.organizerSettings() != null,
+            speechConfigured = voice?.speechConfigured() == true,
+            voiceProvider = voice?.provider,
+            voiceLanguage = voice?.language ?: VoiceLanguages.Mandarin.code,
             aiError = null,
         )
     }
 
-    fun onAiSettingsChange(field: AiSettingsField, value: String) {
+    private fun voiceSettingsForm(voice: VoiceServiceSettings?): AiSettingsForm {
+        val legacy = runCatching { aiSettingsStore.load() }.getOrNull()
+        return AiSettingsForm(
+            provider = voice?.provider,
+            language = voice?.language ?: VoiceLanguages.Mandarin.code,
+            doubaoSpeechApiKey = "",
+            doubaoSpeechResourceId = voice?.doubao?.resourceId
+                ?: DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+            doubaoTextApiKey = "",
+            doubaoTextModel = voice?.doubao?.textModel.orEmpty(),
+            aliyunApiKey = "",
+            aliyunTextModel = voice?.aliyun?.textModel
+                ?: AliyunVoiceCredentials.DEFAULT_TEXT_MODEL,
+            legacyBaseUrl = legacy?.baseUrl.orEmpty(),
+            legacyModel = legacy?.model.orEmpty(),
+            legacyConfigured = legacy != null,
+        )
+    }
+
+    fun onVoiceProviderChange(provider: VoiceProvider) {
+        val form = _state.value.aiSettingsForm ?: return
+        val language = if (VoiceLanguages.isSupported(provider, form.language)) {
+            form.language
+        } else {
+            VoiceLanguages.Mandarin.code
+        }
+        _state.value = _state.value.copy(
+            aiSettingsForm = form.copy(
+                provider = provider,
+                language = language,
+                speechError = null,
+            ),
+        )
+    }
+
+    fun onVoiceLanguageChange(code: String) {
+        val form = _state.value.aiSettingsForm ?: return
+        val provider = form.provider ?: return
+        if (!VoiceLanguages.isSupported(provider, code)) return
+        _state.value = _state.value.copy(
+            aiSettingsForm = form.copy(language = code, speechError = null),
+        )
+    }
+
+    fun onVoiceSettingsChange(field: VoiceSettingsField, value: String) {
         val form = _state.value.aiSettingsForm ?: return
         _state.value = _state.value.copy(
             aiSettingsForm = when (field) {
-                AiSettingsField.BaseUrl -> form.copy(baseUrl = value, error = null)
-                AiSettingsField.Model -> form.copy(model = value, error = null)
-                AiSettingsField.ApiKey -> form.copy(apiKey = value, error = null)
+                VoiceSettingsField.DoubaoSpeechApiKey ->
+                    form.copy(doubaoSpeechApiKey = value, speechError = null)
+                VoiceSettingsField.DoubaoResourceId ->
+                    form.copy(doubaoSpeechResourceId = value, speechError = null)
+                VoiceSettingsField.DoubaoTextApiKey ->
+                    form.copy(doubaoTextApiKey = value, speechError = null)
+                VoiceSettingsField.DoubaoTextModel ->
+                    form.copy(doubaoTextModel = value, speechError = null)
+                VoiceSettingsField.AliyunApiKey ->
+                    form.copy(aliyunApiKey = value, speechError = null)
+                VoiceSettingsField.AliyunTextModel ->
+                    form.copy(aliyunTextModel = value, speechError = null)
             }
         )
     }
 
-    fun onSpeechSettingsChange(field: SpeechSettingsField, value: String) {
-        val form = _state.value.aiSettingsForm ?: return
-        _state.value = _state.value.copy(
-            aiSettingsForm = when (field) {
-                SpeechSettingsField.ApiKey ->
-                    form.copy(speechApiKey = value, speechError = null)
-                SpeechSettingsField.ResourceId ->
-                    form.copy(speechResourceId = value, speechError = null)
-            }
-        )
-    }
-
-    fun onSaveSpeechSettings() {
+    fun onSaveVoiceSettings() {
         val form = _state.value.aiSettingsForm ?: return
         val existing = runCatching { speechSettingsStore.load() }.getOrNull()
         val clean = try {
-            DoubaoSpeechSettings(
-                apiKey = form.speechApiKey,
-                resourceId = form.speechResourceId,
-                uploadAcknowledged = existing?.uploadAcknowledged ?: false,
-            ).validate()
+            buildVoiceSettings(form, existing).validate()
         } catch (e: IllegalArgumentException) {
             _state.value = _state.value.copy(
                 aiSettingsForm = form.copy(speechError = e.message),
@@ -1138,12 +1217,21 @@ class TodoViewModel @JvmOverloads constructor(
             speechSettingsStore.save(clean)
             _state.value = _state.value.copy(
                 aiSettingsForm = form.copy(
-                    speechApiKey = clean.apiKey,
-                    speechResourceId = clean.resourceId,
+                    provider = clean.provider,
+                    language = clean.language,
+                    doubaoSpeechApiKey = "",
+                    doubaoSpeechResourceId = clean.doubao.resourceId,
+                    doubaoTextApiKey = "",
+                    doubaoTextModel = clean.doubao.textModel,
+                    aliyunApiKey = "",
+                    aliyunTextModel = clean.aliyun.textModel,
                     speechError = null,
                 ),
-                speechConfigured = true,
-                message = "豆包语音配置已保存（密钥已加密存储，不进入日志或备份）",
+                speechConfigured = clean.speechConfigured(),
+                aiConfigured = clean.organizerSettings() != null,
+                voiceProvider = clean.provider,
+                voiceLanguage = clean.language,
+                message = "语音与 AI 配置已保存（密钥已加密存储，不进入日志或备份）",
             )
         } catch (e: Exception) {
             _state.value = _state.value.copy(
@@ -1152,63 +1240,58 @@ class TodoViewModel @JvmOverloads constructor(
         }
     }
 
-    fun onClearSpeechSettings() {
+    private fun buildVoiceSettings(
+        form: AiSettingsForm,
+        existing: VoiceServiceSettings?,
+    ): VoiceServiceSettings {
+        val provider = form.provider
+            ?: throw IllegalArgumentException("请选择豆包或阿里云")
+        val existingDoubao = existing?.doubao ?: DoubaoVoiceCredentials()
+        val existingAliyun = existing?.aliyun ?: AliyunVoiceCredentials()
+        fun preserved(input: String, saved: String): String =
+            input.trim().ifBlank { saved }
+        return VoiceServiceSettings(
+            provider = provider,
+            language = form.language,
+            doubao = DoubaoVoiceCredentials(
+                speechApiKey = preserved(
+                    form.doubaoSpeechApiKey,
+                    existingDoubao.speechApiKey,
+                ),
+                resourceId = form.doubaoSpeechResourceId,
+                textApiKey = preserved(form.doubaoTextApiKey, existingDoubao.textApiKey),
+                textModel = preserved(form.doubaoTextModel, existingDoubao.textModel),
+                textBaseUrl = existingDoubao.textBaseUrl,
+            ),
+            aliyun = AliyunVoiceCredentials(
+                apiKey = preserved(form.aliyunApiKey, existingAliyun.apiKey),
+                textModel = preserved(form.aliyunTextModel, existingAliyun.textModel),
+                textBaseUrl = existingAliyun.textBaseUrl,
+                speechModel = existingAliyun.speechModel,
+            ),
+            uploadConsentVersion = existing?.uploadConsentVersion ?: 0,
+            acknowledgedProviders = existing?.acknowledgedProviders ?: emptySet(),
+        )
+    }
+
+    fun onClearVoiceSettings() {
         try {
             speechSettingsStore.clear()
             _state.value = _state.value.copy(
-                aiSettingsForm = _state.value.aiSettingsForm?.copy(
-                    speechApiKey = "",
-                    speechResourceId = DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+                aiSettingsForm = voiceSettingsForm(null).copy(
                     speechError = null,
                 ),
                 speechConfigured = false,
-                message = "已清除豆包语音配置；仍可手动添加事项",
+                aiConfigured = false,
+                voiceProvider = null,
+                voiceLanguage = VoiceLanguages.Mandarin.code,
+                message = "已清除语音与 AI 配置；仍可手动添加事项",
             )
         } catch (e: Exception) {
             _state.value = _state.value.copy(
                 aiSettingsForm = _state.value.aiSettingsForm?.copy(
                     speechError = "清除语音配置失败，请重试",
                 ),
-            )
-        }
-    }
-
-    fun onSaveAiSettings() {
-        val form = _state.value.aiSettingsForm ?: return
-        val clean = try {
-            AiSettings(form.baseUrl, form.model, form.apiKey).validate()
-        } catch (e: IllegalArgumentException) {
-            _state.value = _state.value.copy(aiSettingsForm = form.copy(error = e.message))
-            return
-        }
-        try {
-            aiSettingsStore.save(clean)
-            _state.value = _state.value.copy(
-                aiSettingsForm = null,
-                aiConfigured = true,
-                aiError = null,
-                message = "AI 服务配置已保存（密钥已加密存储，不进入日志或备份）",
-            )
-        } catch (e: Exception) {
-            _state.value = _state.value.copy(
-                aiSettingsForm = form.copy(error = "配置保存失败，请重试"),
-            )
-        }
-    }
-
-    fun onClearAiSettings() {
-        try {
-            aiSettingsStore.clear()
-            _state.value = _state.value.copy(
-                aiSettingsForm = null,
-                aiConfigured = false,
-                aiError = null,
-                message = "已清除 AI 配置；仍可手动创建事项",
-            )
-        } catch (e: Exception) {
-            _state.value = _state.value.copy(
-                aiSettingsForm = (_state.value.aiSettingsForm ?: AiSettingsForm())
-                    .copy(error = "清除配置失败，请重试"),
             )
         }
     }
@@ -1222,12 +1305,15 @@ class TodoViewModel @JvmOverloads constructor(
         val current = _state.value
         if (current.aiBusy) return
         cancelAutoSave()
-        val settings = runCatching { aiSettingsStore.load() }.getOrNull()
+        val voice = runCatching { speechSettingsStore.load() }.getOrNull()
+        val settings = voice?.organizerSettings()
         if (settings == null) {
             _state.value = current.copy(
-                aiSettingsForm = AiSettingsForm(),
+                aiSettingsForm = voiceSettingsForm(voice),
+                voiceProvider = voice?.provider,
+                voiceLanguage = voice?.language ?: VoiceLanguages.Mandarin.code,
                 aiError = null,
-                message = "请先在高级设置中配置 AI 服务地址、模型和密钥",
+                message = "请先在“我的 → 语音与 AI”选择服务并填写该服务的整理凭据",
             )
             return
         }
@@ -1240,7 +1326,16 @@ class TodoViewModel @JvmOverloads constructor(
 
     private fun autoOrganizeAfterSpeech(source: String) {
         if (_state.value.aiBusy) return
-        val settings = runCatching { aiSettingsStore.load() }.getOrNull() ?: return
+        val voice = runCatching { speechSettingsStore.load() }.getOrNull()
+        val settings = voice?.organizerSettings()
+        if (settings == null) {
+            _state.value = _state.value.copy(
+                aiConfigured = false,
+                message = "识别完成；在线整理未配置，请到设置填写，或直接手动保存",
+            )
+            return
+        }
+        _state.value = _state.value.copy(aiConfigured = true)
         launchOrganize(source, settings, auto = true)
     }
 

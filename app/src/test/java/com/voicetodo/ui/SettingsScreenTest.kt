@@ -47,6 +47,8 @@ class SettingsScreenTest {
                     ),
                     aiConfigured = true,
                     speechConfigured = true,
+                    voiceProviderLabel = "豆包",
+                    voiceLanguageLabel = "普通话",
                     busy = false,
                     message = null,
                     onThemeChange = { preferences = preferences.copy(theme = it) },
@@ -66,6 +68,8 @@ class SettingsScreenTest {
         compose.onNodeWithTag("settings_pomodoro").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_appearance").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_voice_ai").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("语音识别：豆包 在线（已配置）", substring = true)
+            .assertIsDisplayed()
         compose.onNodeWithTag("settings_permissions").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_data").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_trash").performScrollTo().assertIsDisplayed()

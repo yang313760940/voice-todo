@@ -43,7 +43,10 @@ import com.voicetodo.ai.AiReminderDraft
 import com.voicetodo.ai.AiReminderKind
 import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.speech.AliyunVoiceCredentials
 import com.voicetodo.speech.DoubaoSpeechSettings
+import com.voicetodo.speech.VoiceLanguages
+import com.voicetodo.speech.VoiceProvider
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -58,179 +61,285 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("高级设置 · 在线语音与 AI", style = MaterialTheme.typography.headlineSmall)
+            Text("语音与 AI", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "语音识别使用豆包在线完成：只有你主动录音时，16kHz 单声道音频分片和识别文字" +
-                    "才会实时发送到豆包语音服务。语音识别完成（或你主动点“用在线 AI 整理”）时，" +
-                    "应用会把本次文字、当前日期时间、时区与已有清单名称发送到你填写的 AI 服务；" +
-                    "不发送录音、历史事项或其他待办。",
+                "选择豆包或阿里云作为唯一供应商，语音转写和事项整理都走同一家。" +
+                    "只有你主动录音时，本次 16kHz 单声道音频分片才会实时上传；" +
+                    "转写完成后只发送本次文字、当前日期时间和时区用于整理，" +
+                    "不发送历史事项或其他待办。",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
         item {
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth().testTag("voice_provider_card")) {
                 Column(Modifier.fillMaxWidth().padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("OpenAI 兼容服务", fontWeight = FontWeight.Medium)
+                    Text("服务供应商", fontWeight = FontWeight.Medium)
                     Text(
-                        "地址示例：https://api.openai.com/v1 或 https://你的服务/v1。" +
-                            "为保护密钥，远程地址必须使用 https；本机调试可用 127.0.0.1。",
+                        "缺省不绑定任何供应商；首次使用前会再确认一次上传告知。",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = form.provider == VoiceProvider.Doubao,
+                            onClick = { vm.onVoiceProviderChange(VoiceProvider.Doubao) },
+                            label = { Text("豆包") },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("voice_provider_Doubao"),
+                        )
+                        FilterChip(
+                            selected = form.provider == VoiceProvider.Aliyun,
+                            onClick = { vm.onVoiceProviderChange(VoiceProvider.Aliyun) },
+                            label = { Text("阿里云") },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("voice_provider_Aliyun"),
+                        )
+                    }
                     Text(
-                        "密钥使用 Android Keystore 加密保存，不写入日志、备份或源码。",
+                        if (form.provider == null) {
+                            "尚未选择供应商；选择后才会显示该服务需要的凭据和语言。"
+                        } else {
+                            "已选择：${form.provider.label}。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("voice_provider_status"),
                     )
                 }
             }
         }
-        item {
-            OutlinedTextField(
-                value = form.baseUrl,
-                onValueChange = { vm.onAiSettingsChange(AiSettingsField.BaseUrl, it) },
-                label = { Text("服务地址") },
-                placeholder = { Text("https://host/v1") },
-                singleLine = true,
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("ai_base_url_field"),
-            )
+        if (form.provider != null) {
+            item {
+                Card(Modifier.fillMaxWidth().testTag("voice_language_card")) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("识别语言", fontWeight = FontWeight.Medium)
+                        Text(
+                            "默认普通话；只列出${form.provider.label}支持的语言。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            VoiceLanguages.supported(form.provider).forEach { language ->
+                                FilterChip(
+                                    selected = form.language == language.code,
+                                    onClick = { vm.onVoiceLanguageChange(language.code) },
+                                    label = { Text(language.label) },
+                                    enabled = enabled,
+                                    modifier = Modifier.testTag(
+                                        "voice_language_${language.code}",
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            when (form.provider) {
+                VoiceProvider.Doubao -> {
+                    item {
+                        Card(Modifier.fillMaxWidth().testTag("doubao_credentials_card")) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("豆包凭据", fontWeight = FontWeight.Medium)
+                                Text(
+                                    "语音识别与方舟文本整理是两套凭据，必须分别填写。" +
+                                        "密钥使用 Android Keystore 加密保存，不写入日志、备份或源码。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        SecretField(
+                            value = form.doubaoSpeechApiKey,
+                            label = "豆包语音 API Key",
+                            tag = "doubao_speech_api_key_field",
+                            enabled = enabled,
+                            onChange = {
+                                vm.onVoiceSettingsChange(
+                                    VoiceSettingsField.DoubaoSpeechApiKey,
+                                    it,
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = form.doubaoSpeechResourceId,
+                            onValueChange = {
+                                vm.onVoiceSettingsChange(
+                                    VoiceSettingsField.DoubaoResourceId,
+                                    it,
+                                )
+                            },
+                            label = { Text("豆包语音资源 ID") },
+                            placeholder = { Text(DoubaoSpeechSettings.DEFAULT_RESOURCE_ID) },
+                            singleLine = true,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("doubao_resource_id_field"),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = form.doubaoSpeechResourceId ==
+                                    DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+                                onClick = {
+                                    vm.onVoiceSettingsChange(
+                                        VoiceSettingsField.DoubaoResourceId,
+                                        DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+                                    )
+                                },
+                                label = { Text("2.0 小时版") },
+                                enabled = enabled,
+                                modifier = Modifier.testTag("speech_resource_default"),
+                            )
+                            FilterChip(
+                                selected = form.doubaoSpeechResourceId ==
+                                    DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
+                                onClick = {
+                                    vm.onVoiceSettingsChange(
+                                        VoiceSettingsField.DoubaoResourceId,
+                                        DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
+                                    )
+                                },
+                                label = { Text("1.0 小时版") },
+                                enabled = enabled,
+                                modifier = Modifier.testTag("speech_resource_legacy"),
+                            )
+                        }
+                        Text(
+                            "若 2.0 小时版返回 403 未开通，可切换到 1.0 小时版后重试；" +
+                                "应用不会把失败当成功。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    item {
+                        SecretField(
+                            value = form.doubaoTextApiKey,
+                            label = "豆包方舟 API Key",
+                            tag = "doubao_text_api_key_field",
+                            enabled = enabled,
+                            onChange = {
+                                vm.onVoiceSettingsChange(
+                                    VoiceSettingsField.DoubaoTextApiKey,
+                                    it,
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = form.doubaoTextModel,
+                            onValueChange = {
+                                vm.onVoiceSettingsChange(
+                                    VoiceSettingsField.DoubaoTextModel,
+                                    it,
+                                )
+                            },
+                            label = { Text("方舟模型或接入点 ID") },
+                            placeholder = { Text("例如 ep-xxxxxxxx") },
+                            singleLine = true,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("doubao_text_model_field"),
+                        )
+                    }
+                }
+                VoiceProvider.Aliyun -> {
+                    item {
+                        Card(Modifier.fillMaxWidth().testTag("aliyun_credentials_card")) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("阿里云百炼凭据", fontWeight = FontWeight.Medium)
+                                Text(
+                                    "一把百炼 API Key 同时用于实时识别和文本整理。" +
+                                        "密钥使用 Android Keystore 加密保存，不写入日志、备份或源码。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        SecretField(
+                            value = form.aliyunApiKey,
+                            label = "百炼 API Key",
+                            tag = "aliyun_api_key_field",
+                            enabled = enabled,
+                            onChange = {
+                                vm.onVoiceSettingsChange(VoiceSettingsField.AliyunApiKey, it)
+                            },
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = form.aliyunTextModel,
+                            onValueChange = {
+                                vm.onVoiceSettingsChange(VoiceSettingsField.AliyunTextModel, it)
+                            },
+                            label = { Text("百炼文本模型") },
+                            placeholder = { Text(AliyunVoiceCredentials.DEFAULT_TEXT_MODEL) },
+                            singleLine = true,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("aliyun_text_model_field"),
+                        )
+                    }
+                }
+            }
         }
         item {
-            OutlinedTextField(
-                value = form.model,
-                onValueChange = { vm.onAiSettingsChange(AiSettingsField.Model, it) },
-                label = { Text("模型") },
-                placeholder = { Text("模型名称") },
-                singleLine = true,
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("ai_model_field"),
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = form.apiKey,
-                onValueChange = { vm.onAiSettingsChange(AiSettingsField.ApiKey, it) },
-                label = { Text("API 密钥") },
-                singleLine = true,
-                enabled = enabled,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth().testTag("ai_api_key_field"),
-            )
-        }
-        item {
-            form.error?.let {
+            form.speechError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.testTag("ai_settings_error"))
+                    modifier = Modifier.testTag("voice_settings_error"))
             }
             state.aiError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("ai_settings_error"))
             }
-            Message(state.message)
-        }
-        item {
-            Button(onClick = vm::onSaveAiSettings, enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("ai_settings_save")) {
-                Text("保存 AI 配置")
-            }
-            if (state.aiConfigured) {
-                OutlinedButton(onClick = vm::onClearAiSettings, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth().testTag("ai_settings_clear")) {
-                    Text("清除 AI 配置")
-                }
-            }
-        }
-        item {
-            Card(Modifier.fillMaxWidth().testTag("speech_settings_card")) {
-                Column(Modifier.fillMaxWidth().padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("豆包在线语音识别", fontWeight = FontWeight.Medium)
-                    Text(
-                        "新版火山引擎控制台使用 X-Api-Key。密钥使用 Android Keystore 加密保存，" +
-                            "不写入日志、备份或源码。音频分片只保存在内存中，不落盘。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "首次录音前会再次提示“录音和文字将上传到豆包”。",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-        item {
-            OutlinedTextField(
-                value = form.speechApiKey,
-                onValueChange = { vm.onSpeechSettingsChange(SpeechSettingsField.ApiKey, it) },
-                label = { Text("豆包语音 API Key") },
-                singleLine = true,
-                enabled = enabled,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth().testTag("speech_api_key_field"),
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = form.speechResourceId,
-                onValueChange = {
-                    vm.onSpeechSettingsChange(SpeechSettingsField.ResourceId, it)
-                },
-                label = { Text("资源 ID") },
-                placeholder = { Text("volc.seedasr.sauc.duration") },
-                singleLine = true,
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("speech_resource_id_field"),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = form.speechResourceId == DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
-                    onClick = {
-                        vm.onSpeechSettingsChange(
-                            SpeechSettingsField.ResourceId,
-                            DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
-                        )
-                    },
-                    label = { Text("2.0 小时版") },
-                    enabled = enabled,
-                    modifier = Modifier.testTag("speech_resource_default"),
-                )
-                FilterChip(
-                    selected = form.speechResourceId == DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
-                    onClick = {
-                        vm.onSpeechSettingsChange(
-                            SpeechSettingsField.ResourceId,
-                            DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
-                        )
-                    },
-                    label = { Text("1.0 小时版") },
-                    enabled = enabled,
-                    modifier = Modifier.testTag("speech_resource_legacy"),
-                )
-            }
             Text(
-                "若 2.0 小时版返回 403 未开通，请切换到 1.0 小时版后重试；应用不会把失败当成功。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        item {
-            form.speechError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.testTag("speech_settings_error"))
-            }
-            Text(
-                if (state.speechConfigured) "豆包语音：已配置" else "豆包语音：未配置",
+                if (state.speechConfigured) "语音识别：已配置" else "语音识别：未配置",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("speech_settings_status"),
             )
-            Button(onClick = vm::onSaveSpeechSettings, enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("speech_settings_save")) {
-                Text("保存语音配置")
+            Text(
+                if (state.aiConfigured) "事项整理：已配置" else "事项整理：未配置",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("ai_settings_status"),
+            )
+            Message(state.message)
+        }
+        item {
+            Button(onClick = vm::onSaveVoiceSettings, enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("voice_settings_save")) {
+                Text("保存语音与 AI 配置")
             }
-            if (state.speechConfigured) {
-                OutlinedButton(onClick = vm::onClearSpeechSettings, enabled = enabled,
-                    modifier = Modifier.fillMaxWidth().testTag("speech_settings_clear")) {
-                    Text("清除语音配置")
+            if (state.voiceProvider != null) {
+                OutlinedButton(onClick = vm::onClearVoiceSettings, enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().testTag("voice_settings_clear")) {
+                    Text("清除语音与 AI 配置")
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth().testTag("legacy_ai_settings_card")) {
+                Column(Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("旧配置（仅查看，不参与语音添加）", fontWeight = FontWeight.Medium)
+                    if (form.legacyConfigured) {
+                        Text(
+                            "地址：${form.legacyBaseUrl}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "模型：${form.legacyModel} · 密钥已隐藏",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "这是旧版 OpenAI 兼容配置，保留查看，但不再参与转写或事项整理。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        Text(
+                            "未保留旧版 OpenAI 兼容配置。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         }
@@ -241,6 +350,27 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
             }
         }
     }
+}
+
+@Composable
+private fun SecretField(
+    value: String,
+    label: String,
+    tag: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        placeholder = { Text("留空保持不变") },
+        singleLine = true,
+        enabled = enabled,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth().testTag(tag),
+    )
 }
 
 @Composable

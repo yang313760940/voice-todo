@@ -6,6 +6,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -38,6 +40,10 @@ import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.speech.DoubaoVoiceCredentials
+import com.voicetodo.speech.MemorySpeechSettingsStore
+import com.voicetodo.speech.VoiceProvider
+import com.voicetodo.speech.VoiceServiceSettings
 import java.time.Instant
 import java.time.DayOfWeek
 import java.time.ZoneId
@@ -73,11 +79,22 @@ class AiDraftFlowTest {
     private val store = ViewModelStore()
     private val clock = FrozenClock(Instant.parse("2026-11-04T09:00:00Z"))
     private val scheduler = RecordedScheduler()
-    private val settingsStore = MemoryAiSettingsStore()
+    private val legacyAiStore = MemoryAiSettingsStore()
+    private val voiceStore = MemorySpeechSettingsStore()
     private val aiClient = FakeAiAssistClient()
     private var activeAiClient: AiAssistClient? = null
     private val key = "test" + "-key"
-    private val settings = AiSettings("https://api.example.com/v1", "test-model", key)
+    private val settings = VoiceServiceSettings(
+        provider = VoiceProvider.Doubao,
+        doubao = DoubaoVoiceCredentials(
+            speechApiKey = "test" + "-speech-key",
+            textApiKey = key,
+            textModel = "test-model",
+            textBaseUrl = "https://api.example.com/v1",
+        ),
+        uploadConsentVersion = VoiceServiceSettings.UPLOAD_CONSENT_VERSION,
+        acknowledgedProviders = setOf(VoiceProvider.Doubao),
+    )
 
     @Before fun setup() {
         activeAiClient = null
@@ -105,7 +122,8 @@ class AiDraftFlowTest {
                     capabilities = { ReminderCapabilities(true, true, true) },
                     clock = clock,
                     zoneId = ZoneId.of("Asia/Shanghai"),
-                    aiSettingsStore = settingsStore,
+                    aiSettingsStore = legacyAiStore,
+                    speechSettingsStore = voiceStore,
                     aiClient = object : AiAssistClient by aiClient {
                         override suspend fun organizeDrafts(
                             text: String,
@@ -231,6 +249,25 @@ class AiDraftFlowTest {
         compose.onNodeWithTag("manual_create_button").performClick()
         waitFor { vm.state.value.detail != null }
         compose.onNodeWithTag("detail_screen").assertIsDisplayed()
+    }
+
+    @Test
+    fun `legacy openai config no longer participates in voice organize`() {
+        legacyAiStore.settings = AiSettings(
+            "https://legacy.example.com/v1",
+            "legacy-model",
+            "test" + "-legacy-key",
+        )
+        typeText("旧配置不应参与语音整理")
+
+        clickAi()
+
+        waitFor { vm.state.value.aiSettingsForm != null }
+        assertEquals(0, aiClient.calls)
+        assertEquals(
+            "https://legacy.example.com/v1",
+            vm.state.value.aiSettingsForm!!.legacyBaseUrl,
+        )
     }
 
     @Test
@@ -617,7 +654,11 @@ class AiDraftFlowTest {
         ))).toString()
         LocalHttpServer(200, response).use { server ->
             configureStore()
-            settingsStore.settings = AiSettings("http://127.0.0.1:${server.port}/v1", "test-model", key)
+            voiceStore.settings = settings.copy(
+                doubao = settings.doubao.copy(
+                    textBaseUrl = "http://127.0.0.1:${server.port}/v1",
+                ),
+            )
             activeAiClient = OpenAiCompatibleClient()
             typeText("明天买菜，每周一三五六点半锻炼，过几天交报告")
             clickAi()
@@ -628,22 +669,71 @@ class AiDraftFlowTest {
     }
 
     @Test
-    fun `settings screen saves the service and key through the store`() {
+    fun `voice settings start unbound and only show the selected provider fields`() {
         compose.onNodeWithTag("ai_settings_button").performClick()
         waitFor { vm.state.value.aiSettingsForm != null }
-        compose.onNodeWithTag("ai_base_url_field").performTextInput(settings.baseUrl)
-        compose.onNodeWithTag("ai_model_field").performTextInput(settings.model)
-        compose.onNodeWithTag("ai_api_key_field").performTextInput(key)
-        compose.onNodeWithTag("ai_settings_screen")
-            .performScrollToNode(hasTestTag("ai_settings_save"))
-        compose.onNodeWithTag("ai_settings_save").performClick()
-        waitFor { vm.state.value.aiSettingsForm == null && vm.state.value.aiConfigured }
 
-        val saved = settingsStore.settings
+        compose.onNodeWithTag("voice_provider_status")
+            .assertTextContains("尚未选择供应商", substring = true)
+        compose.onNodeWithTag("doubao_speech_api_key_field").assertDoesNotExist()
+        compose.onNodeWithTag("aliyun_api_key_field").assertDoesNotExist()
+        compose.onNodeWithTag("legacy_ai_settings_card").assertExists()
+
+        compose.onNodeWithTag("voice_provider_Doubao").performClick()
+        compose.onNodeWithTag("doubao_speech_api_key_field").assertExists()
+        compose.onNodeWithTag("aliyun_api_key_field").assertDoesNotExist()
+        compose.onNodeWithTag("voice_language_zh-CN").assertIsSelected()
+        compose.onNodeWithTag("voice_language_yue-CN").assertExists()
+        compose.onNodeWithTag("voice_language_fr-FR").assertDoesNotExist()
+
+        compose.onNodeWithTag("voice_provider_Aliyun").performClick()
+        compose.onNodeWithTag("aliyun_api_key_field").assertExists()
+        compose.onNodeWithTag("doubao_speech_api_key_field").assertDoesNotExist()
+    }
+
+    @Test
+    fun `settings screen saves provider language and credentials through the store`() {
+        compose.onNodeWithTag("ai_settings_button").performClick()
+        waitFor { vm.state.value.aiSettingsForm != null }
+        compose.onNodeWithTag("voice_provider_Doubao").performClick()
+        compose.onNodeWithTag("voice_language_yue-CN").performClick()
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("doubao_speech_api_key_field"))
+        compose.onNodeWithTag("doubao_speech_api_key_field")
+            .performTextInput(settings.doubao.speechApiKey)
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("doubao_text_api_key_field"))
+        compose.onNodeWithTag("doubao_text_api_key_field").performTextInput(key)
+        compose.onNodeWithTag("doubao_text_model_field").performTextInput("test-model")
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("voice_settings_save"))
+        compose.onNodeWithTag("voice_settings_save").performClick()
+        waitFor { vm.state.value.aiConfigured && vm.state.value.speechConfigured }
+
+        val saved = voiceStore.settings
         assertNotNull(saved)
-        assertEquals(settings.baseUrl, saved!!.baseUrl)
-        assertEquals(settings.model, saved.model)
-        assertEquals(key, saved.apiKey)
+        assertEquals(VoiceProvider.Doubao, saved!!.provider)
+        assertEquals("yue-CN", saved.language)
+        assertEquals(settings.doubao.speechApiKey, saved.doubao.speechApiKey)
+        assertEquals(key, saved.doubao.textApiKey)
+        assertEquals("test-model", saved.doubao.textModel)
+    }
+
+    @Test
+    fun `saved credentials are never echoed and blank fields keep them`() {
+        voiceStore.settings = settings
+        compose.runOnIdle { vm.onOpenAiSettings() }
+        waitFor { vm.state.value.aiSettingsForm != null }
+
+        assertEquals("", vm.state.value.aiSettingsForm!!.doubaoSpeechApiKey)
+        assertEquals("", vm.state.value.aiSettingsForm!!.doubaoTextApiKey)
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("voice_settings_save"))
+        compose.onNodeWithTag("voice_settings_save").performClick()
+        waitFor { vm.state.value.aiConfigured && vm.state.value.speechConfigured }
+
+        assertEquals(settings.doubao.speechApiKey, voiceStore.settings!!.doubao.speechApiKey)
+        assertEquals(settings.doubao.textApiKey, voiceStore.settings!!.doubao.textApiKey)
     }
 
     @Test
@@ -695,7 +785,7 @@ class AiDraftFlowTest {
     }
 
     private fun configureStore() {
-        settingsStore.settings = settings
+        voiceStore.settings = settings
         compose.runOnIdle {
             vm.onOpenAiSettings()
             vm.onCloseAiSettings()

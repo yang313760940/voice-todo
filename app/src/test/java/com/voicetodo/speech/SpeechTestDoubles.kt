@@ -4,10 +4,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 
-class MemorySpeechSettingsStore(var settings: DoubaoSpeechSettings? = null) : SpeechSettingsStore {
-    override fun load(): DoubaoSpeechSettings? = settings
+class MemorySpeechSettingsStore(var settings: VoiceServiceSettings? = null) : SpeechSettingsStore {
+    override fun load(): VoiceServiceSettings? = settings
 
-    override fun save(settings: DoubaoSpeechSettings) {
+    override fun save(settings: VoiceServiceSettings) {
         this.settings = settings.validate()
     }
 
@@ -23,6 +23,7 @@ class FakeSpeechStream : SpeechStream {
     var started = false
     var finished = false
     var cancelled = false
+    var language: String? = null
     val chunks = mutableListOf<ByteArray>()
 
     fun emit(event: SpeechEvent) {
@@ -31,6 +32,7 @@ class FakeSpeechStream : SpeechStream {
 
     override fun start(language: String) {
         started = true
+        this.language = language
     }
 
     override fun pushPcm(pcm: ByteArray, length: Int) {

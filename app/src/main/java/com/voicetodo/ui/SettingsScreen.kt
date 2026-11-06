@@ -142,6 +142,10 @@ fun SettingsScreen(
             capabilities = settingsState.capabilities,
             aiConfigured = todoState.aiConfigured,
             speechConfigured = todoState.speechConfigured,
+            voiceProviderLabel = todoState.voiceProvider?.label,
+            voiceLanguageLabel = com.voicetodo.speech.VoiceLanguages.label(
+                todoState.voiceLanguage,
+            ),
             busy = settingsState.busy,
             message = settingsState.message,
             onThemeChange = settingsVm::setTheme,
@@ -191,6 +195,8 @@ internal fun MySettingsContent(
     capabilities: ReminderCapabilities?,
     aiConfigured: Boolean,
     speechConfigured: Boolean,
+    voiceProviderLabel: String? = null,
+    voiceLanguageLabel: String? = null,
     busy: Boolean,
     message: String?,
     onThemeChange: (ThemePreference) -> Unit,
@@ -296,19 +302,22 @@ internal fun MySettingsContent(
         item {
             SettingsSection("语音与 AI", "settings_voice_ai") {
                 Text(
-                    text = if (speechConfigured) {
-                        "语音识别：豆包在线（已配置）。录音和文字会发送到豆包。"
+                    text = if (voiceProviderLabel == null) {
+                        "语音识别：未选择服务；点麦克风可按提示前往配置。"
+                    } else if (speechConfigured) {
+                        "语音识别：$voiceProviderLabel 在线（已配置）· " +
+                            "${voiceLanguageLabel ?: "普通话"}。录音和文字会发送到$voiceProviderLabel。"
                     } else {
-                        "语音识别：豆包在线（未配置）；可先用文字添加。"
+                        "语音识别：$voiceProviderLabel（未配置）；可先用文字添加。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("speech_settings_status"),
                 )
                 Text(
                     text = if (aiConfigured) {
-                        "AI 整理：已配置。"
+                        "事项整理：${voiceProviderLabel ?: "未选择服务"}（已配置）。"
                     } else {
-                        "AI 整理：未配置。"
+                        "事项整理：未配置。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("ai_settings_status"),
@@ -1020,10 +1029,11 @@ internal fun AboutScreen(
                 ) {
                     Text("隐私说明", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "事项、专注记录、偏好和回收站数据保存在本机。语音识别使用豆包在线服务：" +
-                            "只有你主动录音时，16kHz 单声道音频分片和识别文字才会实时发送到豆包；" +
+                        "事项、专注记录、偏好和回收站数据保存在本机。语音识别和事项整理使用你在" +
+                            "“我的 → 语音与 AI”选择的同一家在线服务（豆包或阿里云）：" +
+                            "只有你主动录音时，16kHz 单声道音频分片和识别文字才会实时发送到所选服务；" +
                             "录音不落盘，也不会发送到其他服务。语音识别完成（或你主动选择在线 AI 整理）时，" +
-                            "本次文字、必要日期时间、时区和已有清单名称才会发送到你配置的 AI 服务。" +
+                            "本次文字、必要日期时间、时区和已有清单名称才会发送到同一家服务。" +
                             "历史事项、API 密钥和权限授权不会作为 AI 上下文发送。" +
                             "API 密钥使用 Android Keystore 加密保存，不写入日志或业务备份。",
                         style = MaterialTheme.typography.bodySmall,

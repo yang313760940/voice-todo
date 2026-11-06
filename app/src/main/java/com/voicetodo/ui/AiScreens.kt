@@ -17,6 +17,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -24,6 +26,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,8 +61,9 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
             Text("高级设置 · 在线语音与 AI", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "语音识别使用豆包在线完成：只有你主动录音时，16kHz 单声道音频分片和识别文字" +
-                    "才会实时发送到豆包语音服务。只有你主动点“用在线 AI 整理”时，应用才会把" +
-                    "当前文字、当前日期时间和时区发送到你填写的 AI 服务。",
+                    "才会实时发送到豆包语音服务。语音识别完成（或你主动点“用在线 AI 整理”）时，" +
+                    "应用会把本次文字、当前日期时间、时区与已有清单名称发送到你填写的 AI 服务；" +
+                    "不发送录音、历史事项或其他待办。",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -239,6 +246,7 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
 @Composable
 fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Boolean) {
     val context = LocalContext.current
+    var listMenuOpen by remember { mutableStateOf(false) }
 
     fun pickDate(current: String, onPicked: (String) -> Unit) {
         val initial = runCatching { LocalDate.parse(current.take(10)) }
@@ -315,6 +323,57 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
                 label = { Text("事项名称") },
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("ai_draft_title_field"),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = draft.note,
+                onValueChange = vm::onAiDraftNoteChange,
+                label = { Text("备注（不进入提醒正文）") },
+                enabled = enabled,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth().testTag("ai_draft_note_field"),
+            )
+        }
+        item {
+            val listName = draft.listId?.let { id ->
+                state.todoLists.firstOrNull { it.id == id }?.name
+            } ?: "收集箱"
+            OutlinedButton(
+                onClick = { listMenuOpen = true },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("ai_draft_list_selector"),
+            ) {
+                Text("清单：$listName")
+            }
+            DropdownMenu(
+                expanded = listMenuOpen,
+                onDismissRequest = { listMenuOpen = false },
+                modifier = Modifier.testTag("ai_draft_list_menu"),
+            ) {
+                DropdownMenuItem(
+                    text = { Text("收集箱") },
+                    onClick = { vm.onAiDraftListChange(null); listMenuOpen = false },
+                    modifier = Modifier.testTag("ai_draft_list_inbox"),
+                )
+                state.todoLists.forEach { list ->
+                    DropdownMenuItem(
+                        text = { Text(list.name) },
+                        onClick = { vm.onAiDraftListChange(list.id); listMenuOpen = false },
+                        modifier = Modifier.testTag("ai_draft_list_${list.id}"),
+                    )
+                }
+            }
+            draft.listNotice?.let { notice ->
+                Text(
+                    notice,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Text(
+                "没有具体提醒时间的事项会自动放入收集箱。",
+                style = MaterialTheme.typography.bodySmall,
             )
         }
         item {
@@ -474,6 +533,13 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
             Message(state.message)
         }
         item {
+            OutlinedButton(
+                onClick = vm::onConfirmAiDraftAsInbox,
+                enabled = enabled && state.aiDrafts.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().testTag("ai_inbox_all_button"),
+            ) {
+                Text("全部存入收集箱、不设提醒")
+            }
             Button(
                 onClick = vm::onConfirmAiDraft,
                 enabled = enabled && state.aiDrafts.isNotEmpty() && state.aiDrafts.all {

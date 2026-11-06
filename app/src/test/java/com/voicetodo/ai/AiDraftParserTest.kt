@@ -90,6 +90,39 @@ class AiDraftParserTest {
     }
 
     @Test
+    fun `parses note and list name separately from the title`() {
+        val draft = AiDraftParser.parse(
+            """{"title":"复诊","note":"下午\n带医保卡","listName":"健康",
+                "plannedDate":"2026-11-06","reminders":[]}""",
+            "明天下午去复诊，健康清单",
+            zone,
+        )
+
+        assertEquals("复诊", draft.title)
+        assertEquals("下午\n带医保卡", draft.note)
+        assertEquals("健康", draft.listName)
+        assertEquals("下午\n带医保卡", draft.toTodoEdit(zone).note)
+    }
+
+    @Test
+    fun `invalid plan date keeps the draft for correction instead of dropping it`() {
+        val draft = AiDraftParser.parse(
+            """{"title":"春节聚会","plannedDate":"2026-02-30"}""",
+            "2月30日聚会",
+            zone,
+        )
+
+        assertEquals("2026-02-30", draft.plannedDate)
+        assertTrue(draft.clarification!!.contains("无法识别"))
+        try {
+            draft.toTodoEdit(zone)
+            fail("无效日期必须在确认时阻止保存")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("计划日期"))
+        }
+    }
+
+    @Test
     fun `invalid reminder or missing title is rejected instead of executed`() {
         try {
             AiDraftParser.parse("""{"title":"坏提醒","reminders":[{"kind":"UNKNOWN"}]}""", "x", zone)

@@ -27,7 +27,7 @@ class MultiDraftHttpTest {
     @Test
     fun `one sentence returns three separate drafts including a recurring suggestion`() = runBlocking {
         val content = """{"drafts":[
-            {"title":"买菜","plannedDate":"2026-11-06"},
+            {"title":"买菜","note":"下午去","listName":"生活","plannedDate":"2026-11-06"},
             {"title":"锻炼","recurrence":{
                 "frequency":"WEEKLY","weekdays":[1,3,5],"time":"18:30"
             }},
@@ -46,6 +46,8 @@ class MultiDraftHttpTest {
             assertEquals(3, drafts.map { it.itemId }.distinct().size)
             assertTrue(drafts.all { it.sourceText == source })
             assertTrue(drafts[0].reminders.isEmpty())
+            assertEquals("下午去", drafts[0].note)
+            assertEquals("生活", drafts[0].listName)
             assertEquals(RecurrenceFrequency.Weekly, drafts[1].recurrence!!.frequency)
             assertEquals(
                 setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY),

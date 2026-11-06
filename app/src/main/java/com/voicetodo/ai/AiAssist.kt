@@ -34,6 +34,8 @@ data class AiDraft(
     val itemId: String = UUID.randomUUID().toString(),
     val sourceText: String,
     val title: String,
+    /** 独立备注；与标题、时间、提醒分开，不进入通知正文。 */
+    val note: String = "",
     val plannedDate: String = "",
     val dueAt: String = "",
     val reminders: List<AiReminderDraft> = emptyList(),
@@ -43,6 +45,12 @@ data class AiDraft(
     val clarification: String? = null,
     val noReminderAcknowledged: Boolean = false,
     val recurrence: AiRecurrenceDraft? = null,
+    /** AI 点名的清单名称；客户端只与已有清单精确匹配，不自动新建。 */
+    val listName: String = "",
+    /** 匹配成功后的清单 id；null 表示收集箱。 */
+    val listId: String? = null,
+    /** 清单无法匹配时的提示；不影响时间澄清的阻塞状态。 */
+    val listNotice: String? = null,
 ) {
     val hasUsableReminder: Boolean
         get() = reminders.any { it.value.isNotBlank() } ||
@@ -82,6 +90,7 @@ data class AiDraft(
         }
         return TodoEdit(
             title = title,
+            note = note,
             plannedDate = planned,
             dueAt = due,
             remindAt = reminderEdits.firstOrNull { it.at != null }?.at,
@@ -168,26 +177,36 @@ internal object AiDraftParser {
         if (title.isEmpty()) {
             throw AiAssistException("AI 返回的草稿缺少事项名称；文字已保留，可手动创建")
         }
+        val warnings = mutableListOf<String>()
         val plannedDate = optionalText(json, "plannedDate")?.let {
             try {
                 LocalDate.parse(it).toString()
             } catch (e: DateTimeParseException) {
-                throw AiAssistException("AI 返回的计划日期无法识别；文字已保留，可手动填写", e)
+                warnings += "计划日期「$it」无法识别，请修改"
+                it
             }
         }.orEmpty()
         val dueAt = optionalText(json, "dueAt")?.let {
-            formatLocal(parseDateTime(it, zoneId, "截止时间"), zoneId)
+            try {
+                formatLocal(parseDateTime(it, zoneId, "截止时间"), zoneId)
+            } catch (e: AiAssistException) {
+                warnings += "截止时间「$it」无法识别，请修改"
+                it
+            }
         }.orEmpty()
         if (json.has("reminders") && !json.isNull("reminders") && json.opt("reminders") !is JSONArray) {
             throw AiAssistException("AI 返回的提醒列表格式无效；文字已保留")
         }
-        val reminders = parseReminders(json.optJSONArray("reminders"), zoneId)
+        val reminders = parseReminders(json.optJSONArray("reminders"), zoneId, warnings)
         val quadrantText = optionalText(json, "quadrant")
         val quadrant = parseQuadrant(quadrantText)
-        val clarification = optionalText(json, "clarification")
+        val clarification = (
+            listOfNotNull(optionalText(json, "clarification")) + warnings
+            ).joinToString("\n").ifBlank { null }
         return AiDraft(
             sourceText = sourceText,
             title = title,
+            note = optionalText(json, "note").orEmpty(),
             plannedDate = plannedDate,
             dueAt = dueAt,
             reminders = reminders,
@@ -195,6 +214,7 @@ internal object AiDraftParser {
             suggestedQuadrant = quadrantText?.let { quadrant },
             clarification = clarification,
             recurrence = parseRecurrence(json),
+            listName = (optionalText(json, "listName") ?: optionalText(json, "list")).orEmpty(),
         )
     }
 
@@ -223,7 +243,11 @@ internal object AiDraftParser {
         }
     }
 
-    private fun parseReminders(array: JSONArray?, zoneId: ZoneId): List<AiReminderDraft> {
+    private fun parseReminders(
+        array: JSONArray?,
+        zoneId: ZoneId,
+        warnings: MutableList<String>,
+    ): List<AiReminderDraft> {
         if (array == null) return emptyList()
         return (0 until array.length()).map { index ->
             val record = array.optJSONObject(index)
@@ -234,7 +258,12 @@ internal object AiDraftParser {
                         ?: throw AiAssistException("AI 返回的指定提醒缺少时间；请手动填写")
                     AiReminderDraft(
                         kind = AiReminderKind.Specified,
-                        value = formatLocal(parseDateTime(at, zoneId, "提醒时间"), zoneId),
+                        value = try {
+                            formatLocal(parseDateTime(at, zoneId, "提醒时间"), zoneId)
+                        } catch (e: AiAssistException) {
+                            warnings += "提醒时间「$at」无法识别，请修改"
+                            at
+                        },
                     )
                 }
                 "RELATIVE" -> {

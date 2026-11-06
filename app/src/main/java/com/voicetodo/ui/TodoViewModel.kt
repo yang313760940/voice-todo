@@ -530,6 +530,9 @@ class TodoViewModel @JvmOverloads constructor(
         _state.value = _state.value.copy(
             draftText = "",
             speechPartialText = "",
+            aiDrafts = emptyList(),
+            selectedAiDraftId = null,
+            aiError = null,
             speechState = SpeechUiState.Connecting,
             inputError = null,
             message = null,
@@ -579,13 +582,15 @@ class TodoViewModel @JvmOverloads constructor(
                 speechRecorder?.release()
                 speechRecorder = null
                 speechStream = null
+                val finalText = event.text.ifBlank { _state.value.draftText }
                 _state.value = _state.value.copy(
-                    draftText = event.text.ifBlank { _state.value.draftText },
+                    draftText = finalText,
                     speechPartialText = "",
                     speechState = SpeechUiState.Idle,
                     inputError = null,
                     message = "识别完成；请核对文字后手动保存",
                 )
+                if (finalText.isNotBlank()) autoOrganizeAfterSpeech(finalText)
             }
             is SpeechEvent.Failure -> {
                 speechRecorder?.release()
@@ -900,27 +905,47 @@ class TodoViewModel @JvmOverloads constructor(
             _state.value = current.copy(inputError = "请先输入或识别事项文字")
             return
         }
+        launchOrganize(current.draftText, settings, auto = false)
+    }
 
+    /** 转写完成后自动整理；没有配置 AI 时保留文字与手动入口，不报错、不重试。 */
+    private fun autoOrganizeAfterSpeech(source: String) {
+        if (_state.value.aiBusy) return
+        val settings = runCatching { aiSettingsStore.load() }.getOrNull() ?: return
+        launchOrganize(source, settings, auto = true)
+    }
+
+    private fun launchOrganize(source: String, settings: AiSettings, auto: Boolean) {
         aiGeneration++
         aiJob?.cancel()
         val generation = aiGeneration
-        val source = current.draftText
-        _state.value = current.copy(aiBusy = true, aiError = null, inputError = null, message = null)
+        val lists = _state.value.todoLists
+        _state.value = _state.value.copy(
+            aiBusy = true, aiError = null, inputError = null, message = null,
+        )
         aiJob = viewModelScope.launch {
             try {
                 val drafts = aiClient.organizeDrafts(
                     source,
-                    AiPromptContext(now = clock.now(), zoneId = zoneId),
+                    AiPromptContext(
+                        now = clock.now(),
+                        zoneId = zoneId,
+                        listNames = lists.map { it.name },
+                    ),
                     settings,
                 )
                 require(drafts.isNotEmpty()) { "AI 没有返回事项草稿；文字已保留" }
                 require(drafts.map { it.itemId }.distinct().size == drafts.size) { "AI 草稿身份重复" }
                 if (generation == aiGeneration) {
+                    val resolved = resolveAiDrafts(drafts, source, lists)
                     _state.value = _state.value.copy(
                         aiBusy = false,
-                        aiDrafts = drafts.map { it.copy(sourceText = source) },
-                        selectedAiDraftId = drafts.first().itemId,
+                        aiDrafts = resolved,
+                        selectedAiDraftId = resolved.first().itemId,
                         aiError = null,
+                        message = if (auto) {
+                            "已自动整理为 ${resolved.size} 条草稿；请核对后手动保存"
+                        } else null,
                     )
                 }
             } catch (e: CancellationException) {
@@ -935,6 +960,27 @@ class TodoViewModel @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    /**
+     * 客户端归属规则：只精确匹配已有清单名称；没有具体提醒时间（含只有时段）
+     * 的草稿一律放入收集箱。匹配不到时保留提示，不自动新建清单。
+     */
+    private fun resolveAiDrafts(
+        drafts: List<AiDraft>,
+        source: String,
+        lists: List<TodoList>,
+    ): List<AiDraft> = drafts.map { draft ->
+        val requested = draft.listName.trim()
+        val matched = requested.takeIf { it.isNotEmpty() }
+            ?.let { name -> lists.firstOrNull { it.name.trim() == name } }
+        val missing = requested.isNotBlank() && matched == null
+        val noReminder = draft.reminders.isEmpty() && draft.recurrence == null
+        draft.copy(
+            sourceText = source,
+            listId = if (noReminder) null else matched?.id,
+            listNotice = if (missing) "未找到清单「$requested」，已暂存收集箱" else null,
+        )
     }
 
     fun onCancelAiRequest() = invalidateAiRequest(showMessage = true)
@@ -952,6 +998,10 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onAiDraftTitleChange(title: String) = updateAiDraft { it.copy(title = title) }
+    fun onAiDraftNoteChange(note: String) = updateAiDraft { it.copy(note = note) }
+    fun onAiDraftListChange(listId: String?) = updateAiDraft {
+        it.copy(listId = listId, listName = "")
+    }
     fun onAiDraftPlannedDateChange(value: String) = updateAiDraft { it.copy(plannedDate = value) }
     fun onAiDraftDueChange(value: String) = updateAiDraft { it.copy(dueAt = value) }
     fun onAiDraftQuadrantChange(quadrant: Quadrant) = updateAiDraft { it.copy(quadrant = quadrant) }
@@ -1044,32 +1094,79 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onConfirmAiDraft() {
-        if (_state.value.busy || _state.value.aiDrafts.isEmpty()) return
+        val inputs = buildAiInputs(forceInbox = false) ?: return
+        saveAiInputs(inputs)
+    }
+
+    /**
+     * 阻塞状态的一键路径：保留标题、备注与计划日期，清空提醒和重复规则，
+     * 全部放入收集箱后整批保存。
+     */
+    fun onConfirmAiDraftAsInbox() {
+        val inputs = buildAiInputs(forceInbox = true) ?: return
+        saveAiInputs(inputs)
+    }
+
+    private fun buildAiInputs(forceInbox: Boolean): List<TodoDraftInput>? {
+        if (_state.value.busy || _state.value.aiDrafts.isEmpty()) return null
         val targetListId = _state.value.addTargetListId
         val today = clock.now().atZone(zoneId).toLocalDate()
         val inputs = mutableListOf<TodoDraftInput>()
         for ((index, draft) in _state.value.aiDrafts.withIndex()) {
             try {
-                require(!draft.requiresNoReminderAcknowledgement) {
-                    "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”"
+                if (forceInbox) {
+                    require(draft.title.isNotBlank()) { "标题不能为空" }
+                    val edit = TodoEdit(
+                        title = draft.title.trim(),
+                        plannedDate = draft.plannedDate.trim().takeIf { it.isNotEmpty() }
+                            ?.let(LocalDate::parse),
+                        dueAt = null,
+                        remindAt = null,
+                        reminders = emptyList(),
+                        listId = null,
+                        updateList = true,
+                        note = draft.note,
+                    )
+                    inputs += TodoDraftInput(
+                        itemId = draft.itemId,
+                        edit = edit,
+                        quadrant = draft.quadrant,
+                        suggestedQuadrant = draft.suggestedQuadrant,
+                        recurrence = null,
+                    )
+                } else {
+                    require(!draft.requiresNoReminderAcknowledgement) {
+                        "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”"
+                    }
+                    val noReminder = draft.reminders.isEmpty() && draft.recurrence == null
+                    val listId = if (noReminder) null else draft.listId ?: targetListId
+                    val edit = draft.toTodoEdit(zoneId).copy(listId = listId, updateList = true)
+                    require(edit.title.isNotBlank()) { "标题不能为空" }
+                    edit.reminders.orEmpty().forEach { reminder ->
+                        reminder.at?.let {
+                            require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
+                        }
+                    }
+                    inputs += TodoDraftInput(
+                        itemId = draft.itemId,
+                        edit = edit,
+                        quadrant = draft.quadrant,
+                        suggestedQuadrant = draft.suggestedQuadrant,
+                        recurrence = draft.recurrence?.toRule(edit.plannedDate ?: today),
+                    )
                 }
-                val edit = draft.toTodoEdit(zoneId).copy(listId = targetListId)
-                require(edit.title.isNotBlank()) { "标题不能为空" }
-                inputs += TodoDraftInput(
-                    itemId = draft.itemId,
-                    edit = edit,
-                    quadrant = draft.quadrant,
-                    suggestedQuadrant = draft.suggestedQuadrant,
-                    recurrence = draft.recurrence?.toRule(edit.plannedDate ?: today),
-                )
             } catch (e: IllegalArgumentException) {
                 _state.value = _state.value.copy(
                     selectedAiDraftId = draft.itemId,
                     aiError = "第 ${index + 1} 条：${e.message ?: "草稿字段无效，请检查"}",
                 )
-                return
+                return null
             }
         }
+        return inputs
+    }
+
+    private fun saveAiInputs(inputs: List<TodoDraftInput>) {
         action {
             val results = useCases.confirmDrafts(inputs)
             _state.value = _state.value.copy(

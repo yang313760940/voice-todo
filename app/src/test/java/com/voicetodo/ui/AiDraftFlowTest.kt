@@ -428,6 +428,147 @@ class AiDraftFlowTest {
         assertEquals(java.time.LocalTime.of(18, 30), series.recurrence!!.reminderTimes.single())
     }
 
+    @Test
+    fun `matched list name and note survive confirmation`() {
+        configureStore()
+        compose.runOnIdle { vm.onCreateList("工作") }
+        waitFor { vm.state.value.todoLists.any { it.name == "工作" } }
+        val work = vm.state.value.todoLists.single { it.name == "工作" }
+        aiClient.result = AiDraft(
+            sourceText = "工作清单，明天上午十点提醒我交报告",
+            title = "交报告",
+            note = "带电脑",
+            listName = "工作",
+            reminders = listOf(
+                AiReminderDraft(kind = AiReminderKind.Specified, value = "2026-11-05 10:00"),
+            ),
+        )
+        typeText("工作清单，明天上午十点提醒我交报告")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+        assertEquals(work.id, vm.state.value.aiDraft!!.listId)
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_note_field"))
+        compose.onNodeWithTag("ai_draft_note_field").performTextReplacement("带电脑和工牌")
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+        compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertEquals(work.id, saved.listId)
+        assertEquals("带电脑和工牌", saved.note)
+    }
+
+    @Test
+    fun `missing list falls back to inbox with a notice and keeps date and note`() {
+        configureStore()
+        aiClient.result = AiDraft(
+            sourceText = "明天下午去不存在的清单买菜",
+            title = "买菜",
+            note = "下午去",
+            listName = "不存在的清单",
+            plannedDate = "2026-11-06",
+        )
+        typeText("明天下午去不存在的清单买菜")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+
+        val draft = vm.state.value.aiDraft!!
+        assertNull("匹配不到清单时归入收集箱", draft.listId)
+        assertTrue(draft.listNotice!!.contains("未找到清单"))
+        assertNull("清单提示不应阻塞保存", draft.clarification)
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+        compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertNull(saved.listId)
+        assertEquals("下午去", saved.note)
+        assertEquals(java.time.LocalDate.of(2026, 11, 6), saved.plannedDate)
+        assertTrue(saved.reminders.isEmpty())
+        assertNull(saved.remindAt)
+    }
+
+    @Test
+    fun `matched list without a concrete reminder is forced into inbox`() {
+        configureStore()
+        compose.runOnIdle { vm.onCreateList("工作") }
+        waitFor { vm.state.value.todoLists.any { it.name == "工作" } }
+        val work = vm.state.value.todoLists.single { it.name == "工作" }
+        aiClient.result = AiDraft(
+            sourceText = "工作清单，明天处理",
+            title = "处理资料",
+            listName = "工作",
+            plannedDate = "2026-11-06",
+        )
+        typeText("工作清单，明天处理")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+
+        assertNull("没有具体提醒时间时一律进收集箱", vm.state.value.aiDraft!!.listId)
+        assertEquals("工作", vm.state.value.aiDraft!!.listName)
+        assertNull(vm.state.value.aiDraft!!.listNotice)
+        assertTrue(vm.state.value.todoLists.any { it.id == work.id })
+    }
+
+    @Test
+    fun `inbox-all button saves ambiguous drafts without reminders`() {
+        configureStore()
+        aiClient.result = AiDraft(
+            sourceText = "三点或者四点提醒我交报告",
+            title = "交报告",
+            clarification = "三点还是四点不明确，请确认",
+        )
+        typeText("三点或者四点提醒我交报告")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+        assertTrue(vm.state.value.aiDraft!!.requiresNoReminderAcknowledgement)
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_inbox_all_button"))
+        compose.onNodeWithTag("ai_inbox_all_button").performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertEquals("交报告", saved.title)
+        assertNull(saved.listId)
+        assertNull(saved.remindAt)
+        assertTrue(saved.reminders.isEmpty())
+        assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `past reminder pauses the whole batch and marks the offending draft`() {
+        configureStore()
+        aiClient.results = listOf(
+            AiDraft(
+                sourceText = "十点交报告，明早八点买菜",
+                title = "交报告",
+                reminders = listOf(
+                    AiReminderDraft(kind = AiReminderKind.Specified, value = "2026-11-05 10:00"),
+                ),
+            ),
+            AiDraft(
+                sourceText = "十点交报告，明早八点买菜",
+                title = "买菜",
+                reminders = listOf(
+                    AiReminderDraft(kind = AiReminderKind.Specified, value = "2026-11-04 08:00"),
+                ),
+            ),
+        )
+        typeText("十点交报告，明早八点买菜")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 2 && !vm.state.value.aiBusy }
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_draft_confirm_button"))
+        compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+        waitFor { vm.state.value.aiError != null }
+
+        assertTrue(vm.state.value.aiError!!.startsWith("第 2 条"))
+        assertTrue(vm.state.value.aiError!!.contains("晚于当前时间"))
+        assertEquals("买菜", vm.state.value.aiDraft!!.title)
+        assertEquals(0, runBlocking { repo.all().size })
+    }
+
     private fun withHttpDrafts(block: () -> Unit) {
         val content = """{"drafts":[
             {"title":"买菜","plannedDate":"2026-11-05"},

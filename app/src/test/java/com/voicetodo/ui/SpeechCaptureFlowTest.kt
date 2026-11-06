@@ -13,6 +13,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.voicetodo.ai.AiDraft
+import com.voicetodo.ai.AiSettings
+import com.voicetodo.ai.FakeAiAssistClient
+import com.voicetodo.ai.MemoryAiSettingsStore
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.data.FileTodoRepository
 import com.voicetodo.data.RoomTodoRepository
@@ -54,6 +58,8 @@ class SpeechCaptureFlowTest {
     private val store = ViewModelStore()
     private val clock = FrozenClock(Instant.parse("2026-11-06T01:00:00Z"))
     private val settingsStore = MemorySpeechSettingsStore()
+    private val aiSettingsStore = MemoryAiSettingsStore()
+    private val aiClient = FakeAiAssistClient()
     private val stream = FakeSpeechStream()
     private val streamFactory = FakeSpeechStreamFactory(stream)
     private val recorder = FakeSpeechRecorder()
@@ -78,6 +84,8 @@ class SpeechCaptureFlowTest {
                     speechSettingsStore = settingsStore,
                     speechStreamFactory = streamFactory,
                     speechRecorderFactory = recorderFactory,
+                    aiSettingsStore = aiSettingsStore,
+                    aiClient = aiClient,
                     hasRecordAudioPermission = { true },
                 ) as T
         })[TodoViewModel::class.java]
@@ -236,6 +244,35 @@ class SpeechCaptureFlowTest {
         )
         assertEquals(SpeechUiState.Idle, vm.state.value.speechState)
         assertEquals(1, streamFactory.openCalls)
+    }
+
+    @Test
+    fun `final transcription automatically organizes drafts and still waits for manual save`() {
+        settingsStore.settings = configured()
+        aiSettingsStore.settings = AiSettings(
+            "https://api.example.com/v1", "test-model", "test" + "-key",
+        )
+        aiClient.result = AiDraft(
+            sourceText = "明天下午开会",
+            title = "开会",
+            note = "下午，三楼会议室",
+            plannedDate = "2026-11-07",
+        )
+
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("明天下午开会"))
+        idle()
+        vm.onStopSpeech()
+        idle()
+        stream.emit(SpeechEvent.Final("明天下午开会"))
+        idle()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+
+        assertEquals("识别完成后自动整理一次", 1, aiClient.calls)
+        assertEquals("明天下午开会", vm.state.value.draftText)
+        assertEquals("下午，三楼会议室", vm.state.value.aiDraft!!.note)
+        assertTrue("自动整理后仍需手动保存", vm.state.value.items.isEmpty())
     }
 
     private fun configured() = DoubaoSpeechSettings(

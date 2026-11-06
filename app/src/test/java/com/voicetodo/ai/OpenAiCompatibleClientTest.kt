@@ -63,6 +63,31 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun `sends existing list names and parses note plus list name`() {
+        val content = JSONObject()
+            .put("title", "复诊")
+            .put("note", "下午去")
+            .put("listName", "健康")
+            .put("plannedDate", "2026-11-06")
+            .toString()
+        LocalHttpServer(200, chatResponse(content)).use { server ->
+            val requestContext = context.copy(listNames = listOf("工作", "健康"))
+            val draft = runBlocking {
+                OpenAiCompatibleClient().organize("明天下午复诊", requestContext, settingsFor(server.port))
+            }
+
+            assertEquals("下午去", draft.note)
+            assertEquals("健康", draft.listName)
+            val userText = JSONObject(server.requests.single().body)
+                .getJSONArray("messages")
+                .getJSONObject(1)
+                .getString("content")
+            assertTrue(userText.contains("已有清单：工作、健康"))
+            assertFalse("不发送历史事项", userText.contains("历史事项"))
+        }
+    }
+
+    @Test
     fun `bad credentials fail once with an actionable message and no retry`() {
         LocalHttpServer(401, """{"error":"invalid key"}""").use { server ->
             try {

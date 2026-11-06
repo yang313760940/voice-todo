@@ -104,7 +104,13 @@ class OpenAiCompatibleClient(
             appendLine()
             appendLine("现在：$localNow")
             appendLine("今天：${localNow.take(10)}")
-            append("时区：${context.zoneId.id}")
+            appendLine("时区：${context.zoneId.id}")
+            append(
+                "已有清单：${
+                    context.listNames.takeIf { it.isNotEmpty() }
+                        ?.joinToString("、") ?: "（无）"
+                }",
+            )
         }
         return JSONObject()
             .put("model", settings.model)
@@ -122,6 +128,7 @@ class OpenAiCompatibleClient(
             你是待办事项整理器。只输出一个 JSON 对象 {"drafts":[草稿, ...]}，不要 Markdown、不要解释。
             每件事独立生成一条草稿，不要将多个事项合并为一个。每条草稿字段：
             - title：字符串，必填，简洁的事项名称。
+            - note：字符串或 null。地点、材料、联系人等补充信息；不要把标题重复写进备注。
             - plannedDate："yyyy-MM-dd" 或 null。用户计划哪天处理；它本身不产生提醒。
             - dueAt："yyyy-MM-dd HH:mm" 或 null。最晚完成时刻。
             - reminders：数组，可为空。元素只能是：
@@ -130,6 +137,8 @@ class OpenAiCompatibleClient(
             - quadrant："IMPORTANT_URGENT"、"IMPORTANT_NOT_URGENT"、"NOT_IMPORTANT_URGENT"、
               "NOT_IMPORTANT_NOT_URGENT" 之一，只是建议。
             - clarification：字符串或 null。时间含糊、缺少关键信息时必须说明，不要猜测。
+            - listName：字符串或 null。只有用户明确点名下方“已有清单”中的名称时才填写，
+              必须与该名称完全一致；没有点名、或名称不在列表中时填 null，不要新建清单。
             - recurrence：null 或重复规则对象：
               {"frequency":"DAILY","time":"HH:mm"}，或
               {"frequency":"WEEKLY","weekdays":[1,3,5],"time":"HH:mm"}，或
@@ -143,6 +152,10 @@ class OpenAiCompatibleClient(
             3. “明天买菜”只给 plannedDate，不设置提醒。
             4. 只有用户明确说“提醒我”或给出明确提醒时刻时才生成 reminders。
             5. 所有时间都按用户给出的时区表达；相对提醒必须有 dueAt。
+            6. “明天下午”“晚上”这类只有时段、没有具体时刻的说法：填 plannedDate，
+               reminders 留空，并把“下午”等时段原样写进 note，不得猜成 14:00 等具体时间。
+            7. 同一句话里明确改口时，只采用最后一次说法，不要生成两条冲突草稿。
+            8. 没有具体提醒时刻的事项不要自动归入任何清单，listName 填 null（由客户端放入收集箱）。
         """.trimIndent()
     }
 }

@@ -135,7 +135,7 @@ class SettingsScreenTest {
         compose.onNodeWithTag("about_version").assertIsDisplayed()
         compose.onNodeWithText("版本 0.1.0-test").assertIsDisplayed()
         compose.onNodeWithTag("about_privacy").assertIsDisplayed()
-        compose.onNodeWithText("只有你主动选择在线 AI 整理时", substring = true)
+        compose.onNodeWithText("语音识别完成（或你主动选择在线 AI 整理）时", substring = true)
             .assertIsDisplayed()
     }
 

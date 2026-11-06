@@ -47,6 +47,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -67,6 +68,7 @@ class AiDraftFlowTest {
 
     private lateinit var db: TodoDatabase
     private lateinit var repo: RoomTodoRepository
+    private lateinit var app: Application
     private lateinit var vm: TodoViewModel
     private val store = ViewModelStore()
     private val clock = FrozenClock(Instant.parse("2026-11-04T09:00:00Z"))
@@ -79,12 +81,20 @@ class AiDraftFlowTest {
 
     @Before fun setup() {
         activeAiClient = null
-        val app = ApplicationProvider.getApplicationContext<Application>()
+        app = ApplicationProvider.getApplicationContext<Application>()
         db = Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()
         repo = RoomTodoRepository(
             db,
             FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai")),
         )
+        vm = makeVm()
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        waitFor { !vm.state.value.loading }
+        compose.runOnIdle { vm.onOpenAdd() }
+        waitFor { vm.state.value.addOpen }
+    }
+
+    private fun makeVm(): TodoViewModel {
         vm = ViewModelProvider(store, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
@@ -106,10 +116,7 @@ class AiDraftFlowTest {
                     },
                 ) as T
         })[TodoViewModel::class.java]
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
-        waitFor { !vm.state.value.loading }
-        compose.runOnIdle { vm.onOpenAdd() }
-        waitFor { vm.state.value.addOpen }
+        return vm
     }
 
     @After fun teardown() {
@@ -637,6 +644,54 @@ class AiDraftFlowTest {
         assertEquals(settings.baseUrl, saved!!.baseUrl)
         assertEquals(settings.model, saved.model)
         assertEquals(key, saved.apiKey)
+    }
+
+    @Test
+    fun `retry after organize failure succeeds but never starts auto save`() {
+        configureStore()
+        aiClient.failure = AiAssistException("整理失败")
+        typeText("整理失败后重试")
+        clickAi()
+        waitFor { vm.state.value.aiError != null && !vm.state.value.aiBusy }
+
+        aiClient.failure = null
+        aiClient.result = AiDraft(
+            sourceText = "整理失败后重试",
+            title = "重试成功",
+            plannedDate = "2026-11-07",
+        )
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() && !vm.state.value.aiBusy }
+
+        assertNull(vm.state.value.autoSaveDeadline)
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        compose.waitForIdle()
+        assertEquals(0, runBlocking { repo.all().size })
+    }
+
+    @Test
+    fun `restart does not restore unsaved text or drafts`() {
+        configureStore()
+        aiClient.result = AiDraft(
+            sourceText = "未保存的草稿",
+            title = "未保存",
+            plannedDate = "2026-11-07",
+        )
+        typeText("未保存的草稿")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() && !vm.state.value.aiBusy }
+
+        compose.runOnIdle { store.clear() }
+        val restarted = makeVm()
+        waitFor { !restarted.state.value.loading }
+
+        assertFalse(restarted.state.value.addOpen)
+        assertNull(restarted.state.value.detail)
+        assertTrue(restarted.state.value.aiDrafts.isEmpty())
+        assertTrue(restarted.state.value.draftText.isBlank())
+        assertNull(restarted.state.value.message)
+        assertEquals(0, runBlocking { repo.all().size })
     }
 
     private fun configureStore() {

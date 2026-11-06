@@ -59,6 +59,7 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     todoHasUnsavedContent = todoViewModel::hasUnsavedVoiceContent,
+                    onTodoTabLeaveAttempt = todoViewModel::onTabSwitchAttempt,
                     onContinueTodoEditing = todoViewModel::onContinueVoiceEditing,
                     onDiscardTodoDraft = todoViewModel::onDiscardVoiceDraft,
                 )

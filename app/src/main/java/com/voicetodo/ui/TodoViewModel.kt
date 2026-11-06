@@ -223,6 +223,9 @@ data class UiState(
     val voiceTextEditing: Boolean = false,
     val voiceLimitReached: Boolean = false,
     val voiceDiscardConfirmVisible: Boolean = false,
+    /** 自动保存倒计时截止点；null 表示当前没有待执行的自动保存。 */
+    val autoSaveDeadline: Instant? = null,
+    val autoSaveRemainingMs: Long = 0,
     val seriesLabels: Map<String, String> = emptyMap(),
     val missedReminders: List<MissedReminder> = emptyList(),
     /** 删除重复实例前等待用户选择作用范围。 */
@@ -270,6 +273,8 @@ class TodoViewModel @JvmOverloads constructor(
     private var voiceTimerJob: Job? = null
     private var voiceStartedAt: Instant? = null
     @Volatile private var voiceLastSpeechAt: Instant? = null
+    private var autoSaveJob: Job? = null
+    private var autoSaveSuppressed = false
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -316,6 +321,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     /** 备份恢复替换了整库数据后，丢弃旧编辑上下文并重新读取所有页面状态。 */
     fun refreshAfterExternalDataChange() {
+        cancelAutoSave()
         _state.value = _state.value.copy(
             detail = null,
             addOpen = false,
@@ -333,6 +339,8 @@ class TodoViewModel @JvmOverloads constructor(
             voiceTextEditing = false,
             voiceLimitReached = false,
             voiceDiscardConfirmVisible = false,
+            autoSaveDeadline = null,
+            autoSaveRemainingMs = 0,
             pendingRecurringDeleteId = null,
             message = null,
         )
@@ -420,7 +428,10 @@ class TodoViewModel @JvmOverloads constructor(
             voiceTextEditing = false,
             voiceLimitReached = false,
             voiceDiscardConfirmVisible = false,
+            autoSaveDeadline = null,
+            autoSaveRemainingMs = 0,
         )
+        autoSaveSuppressed = false
         if (startVoice) onStartSpeech()
     }
 
@@ -428,6 +439,7 @@ class TodoViewModel @JvmOverloads constructor(
         if (_state.value.busy) return
         invalidateAiRequest()
         cancelSpeechResources()
+        cancelAutoSave()
         _state.value = _state.value.copy(
             addOpen = false,
             addTargetListId = null,
@@ -447,6 +459,8 @@ class TodoViewModel @JvmOverloads constructor(
             voiceTextEditing = false,
             voiceLimitReached = false,
             voiceDiscardConfirmVisible = false,
+            autoSaveDeadline = null,
+            autoSaveRemainingMs = 0,
         )
     }
 
@@ -483,6 +497,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onDraftTextChange(text: String) {
         invalidateAiRequest()
+        cancelAutoSave()
         _state.value = _state.value.copy(
             draftText = text,
             inputError = null,
@@ -498,6 +513,8 @@ class TodoViewModel @JvmOverloads constructor(
             current.speechState == SpeechUiState.Recording ||
             current.speechState == SpeechUiState.Finishing
         ) return
+        val retryingAfterFailure = current.speechState == SpeechUiState.Failed
+        if (retryingAfterFailure) autoSaveSuppressed = true
         val settings = runCatching { speechSettingsStore.load() }.getOrNull()
         if (settings == null) {
             _state.value = current.copy(
@@ -516,7 +533,7 @@ class TodoViewModel @JvmOverloads constructor(
             _state.value = _state.value.copy(speechConsentVisible = true)
             return
         }
-        startSpeechCapture(settings)
+        startSpeechCapture(settings, suppressAutoSave = retryingAfterFailure)
     }
 
     fun onConfirmSpeechConsent() {
@@ -543,14 +560,17 @@ class TodoViewModel @JvmOverloads constructor(
             speechConsentVisible = false,
             speechConfigured = true,
         )
-        startSpeechCapture(acknowledged)
+        startSpeechCapture(acknowledged, suppressAutoSave = autoSaveSuppressed)
     }
 
     fun onCancelSpeechConsent() {
         _state.value = _state.value.copy(speechConsentVisible = false)
     }
 
-    private fun startSpeechCapture(settings: DoubaoSpeechSettings) {
+    private fun startSpeechCapture(
+        settings: DoubaoSpeechSettings,
+        suppressAutoSave: Boolean = false,
+    ) {
         if (!hasRecordAudioPermission()) {
             _state.value = _state.value.copy(
                 speechState = SpeechUiState.Failed,
@@ -561,6 +581,8 @@ class TodoViewModel @JvmOverloads constructor(
         val stream = speechStreamFactory.open(settings)
         val recorder = speechRecorderFactory.create()
         cancelSpeechResources()
+        cancelAutoSave()
+        autoSaveSuppressed = suppressAutoSave
         speechGeneration++
         val generation = speechGeneration
         speechStream = stream
@@ -581,6 +603,8 @@ class TodoViewModel @JvmOverloads constructor(
             voiceTextEditing = false,
             voiceLimitReached = false,
             voiceDiscardConfirmVisible = false,
+            autoSaveDeadline = null,
+            autoSaveRemainingMs = 0,
         )
         voiceStartedAt = clock.now()
         voiceLastSpeechAt = null
@@ -812,6 +836,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onCancelSpeech() {
         val hadText = _state.value.draftText.isNotBlank()
         cancelSpeechResources()
+        cancelAutoSave()
         _state.value = _state.value.copy(
             speechState = SpeechUiState.Idle,
             speechPartialText = "",
@@ -822,6 +847,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     /** 小笔入口：立即停止当前录音，保留已有文字并进入可编辑状态。 */
     fun onEditVoiceText() {
+        cancelAutoSave()
         if (_state.value.speechState == SpeechUiState.Recording ||
             _state.value.speechState == SpeechUiState.Connecting
         ) {
@@ -847,6 +873,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onRequestCloseVoicePanel() {
         val current = _state.value
         if (!current.voicePanelOpen) return
+        cancelAutoSave()
         if (current.draftText.isBlank() && current.aiDrafts.isEmpty() && !current.aiBusy) {
             onDiscardVoiceDraft()
             return
@@ -861,6 +888,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onContinueVoiceEditing() {
         cancelSpeechResources()
+        cancelAutoSave()
         _state.update {
             it.copy(
                 speechState = SpeechUiState.Idle,
@@ -874,6 +902,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onDiscardVoiceDraft() {
         invalidateAiRequest()
         cancelSpeechResources()
+        cancelAutoSave()
         _state.update {
             it.copy(
                 addOpen = false,
@@ -897,6 +926,8 @@ class TodoViewModel @JvmOverloads constructor(
                 voiceTextEditing = false,
                 voiceLimitReached = false,
                 voiceDiscardConfirmVisible = false,
+                autoSaveDeadline = null,
+                autoSaveRemainingMs = 0,
             )
         }
     }
@@ -961,6 +992,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     /** 把当前识别文字带入已有事项详情，由用户补全字段后创建。 */
     fun onOpenManualCreate() {
+        cancelAutoSave()
         val s = _state.value
         if (s.draftText.isBlank()) {
             _state.value = s.copy(inputError = "请先输入或识别事项文字")
@@ -990,6 +1022,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onSaveWithoutReminder() = save(withoutReminder = true)
 
     private fun save(withoutReminder: Boolean) {
+        cancelAutoSave()
         if (_state.value.speechState != SpeechUiState.Idle) {
             cancelSpeechResources()
             _state.value = _state.value.copy(
@@ -1173,6 +1206,7 @@ class TodoViewModel @JvmOverloads constructor(
     fun onOrganizeWithAi() {
         val current = _state.value
         if (current.aiBusy) return
+        cancelAutoSave()
         val settings = runCatching { aiSettingsStore.load() }.getOrNull()
         if (settings == null) {
             _state.value = current.copy(
@@ -1193,6 +1227,118 @@ class TodoViewModel @JvmOverloads constructor(
         if (_state.value.aiBusy) return
         val settings = runCatching { aiSettingsStore.load() }.getOrNull() ?: return
         launchOrganize(source, settings, auto = true)
+    }
+
+    /** 点倒计时或任何退出/编辑动作都取消本次自动保存；取消后不再自动恢复。 */
+    fun onCancelAutoSave() {
+        if (_state.value.autoSaveDeadline == null) return
+        cancelAutoSave()
+        _state.value = _state.value.copy(message = "已取消自动保存；请核对后手动保存")
+    }
+
+    /** 尝试切换 tab 时立即停止录音并取消自动保存，随后由界面确认是否放弃。 */
+    fun onTabSwitchAttempt() {
+        cancelAutoSave()
+        if (_state.value.speechState == SpeechUiState.Recording ||
+            _state.value.speechState == SpeechUiState.Connecting
+        ) {
+            onStopSpeech()
+        }
+    }
+
+    /** 切到后台或锁屏：停止录音、取消自动保存，已获得的文字保留。 */
+    fun onAppBackgrounded() {
+        cancelAutoSave()
+        if (_state.value.speechState == SpeechUiState.Recording ||
+            _state.value.speechState == SpeechUiState.Connecting
+        ) {
+            onStopSpeech()
+        }
+    }
+
+    internal fun onAutoSaveTick() {
+        val deadline = _state.value.autoSaveDeadline ?: return
+        val remaining = (deadline.toEpochMilli() - clock.now().toEpochMilli()).coerceAtLeast(0)
+        if (remaining <= 0) {
+            performAutoSave()
+        } else {
+            _state.update {
+                if (it.autoSaveDeadline == deadline) {
+                    it.copy(autoSaveRemainingMs = remaining)
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoSave() {
+        autoSaveJob?.cancel()
+        val deadline = clock.now().plusMillis(AUTO_SAVE_DELAY_MS)
+        _state.value = _state.value.copy(
+            autoSaveDeadline = deadline,
+            autoSaveRemainingMs = AUTO_SAVE_DELAY_MS,
+        )
+        autoSaveJob = viewModelScope.launch {
+            while (isActive) {
+                delay(AUTO_SAVE_TICK_MS)
+                onAutoSaveTick()
+                if (_state.value.autoSaveDeadline == null) break
+            }
+        }
+    }
+
+    private fun cancelAutoSave() {
+        autoSaveSuppressed = true
+        autoSaveJob?.cancel()
+        autoSaveJob = null
+        _state.update {
+            it.copy(autoSaveDeadline = null, autoSaveRemainingMs = 0)
+        }
+    }
+
+    private fun performAutoSave() {
+        if (_state.value.busy || _state.value.autoSaveDeadline == null) return
+        performAutoSaveOnce()
+    }
+
+    private fun performAutoSaveOnce() {
+        autoSaveJob?.cancel()
+        autoSaveJob = null
+        _state.update { it.copy(autoSaveDeadline = null, autoSaveRemainingMs = 0) }
+        if (!aiDraftsReadyForAutoSave()) {
+            _state.update {
+                it.copy(
+                    aiError = "草稿包含需要修正的字段，已暂停自动保存；请修改后手动保存",
+                )
+            }
+            return
+        }
+        val inputs = buildAiInputs(forceInbox = false) ?: return
+        saveAiInputs(inputs, automatic = true)
+    }
+
+    /** 自动保存前用可见草稿重新校验，任何阻塞或无效字段都不进入数据库。 */
+    private fun aiDraftsReadyForAutoSave(): Boolean {
+        val drafts = _state.value.aiDrafts
+        if (drafts.isEmpty()) return false
+        if (drafts.any {
+                it.title.isBlank() || it.requiresNoReminderAcknowledgement || it.recurrenceNeedsTime
+            }
+        ) {
+            return false
+        }
+        val today = clock.now().atZone(zoneId).toLocalDate()
+        return runCatching {
+            drafts.forEach { draft ->
+                val edit = draft.toTodoEdit(zoneId)
+                require(edit.title.isNotBlank()) { "标题不能为空" }
+                edit.reminders.orEmpty().forEach { reminder ->
+                    reminder.at?.let { require(it.isAfter(clock.now())) }
+                }
+                draft.recurrence?.toRule(edit.plannedDate ?: today)
+            }
+        }.isSuccess
     }
 
     private fun launchOrganize(source: String, settings: AiSettings, auto: Boolean) {
@@ -1218,15 +1364,25 @@ class TodoViewModel @JvmOverloads constructor(
                 require(drafts.map { it.itemId }.distinct().size == drafts.size) { "AI 草稿身份重复" }
                 if (generation == aiGeneration) {
                     val resolved = resolveAiDrafts(drafts, source, lists)
+                    val autoReady = auto && !autoSaveSuppressed &&
+                        !_state.value.voiceLimitReached
                     _state.value = _state.value.copy(
                         aiBusy = false,
                         aiDrafts = resolved,
                         selectedAiDraftId = resolved.first().itemId,
-                        aiError = null,
-                        message = if (auto) {
+                    )
+                    val ready = autoReady && aiDraftsReadyForAutoSave()
+                    _state.value = _state.value.copy(
+                        aiError = if (autoReady && !ready) {
+                            "草稿包含需要修正的字段，已暂停自动保存；请修改后手动保存"
+                        } else null,
+                        message = if (ready) {
+                            "已自动整理为 ${resolved.size} 条草稿；2 秒后自动保存"
+                        } else if (auto) {
                             "已自动整理为 ${resolved.size} 条草稿；请核对后手动保存"
                         } else null,
                     )
+                    if (ready) scheduleAutoSave()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1292,6 +1448,7 @@ class TodoViewModel @JvmOverloads constructor(
     private fun updateAiDraft(block: (AiDraft) -> AiDraft) {
         if (_state.value.busy) return
         val draft = _state.value.aiDraft ?: return
+        cancelAutoSave()
         _state.value = _state.value.copy(
             aiDrafts = _state.value.aiDrafts.map {
                 if (it.itemId == draft.itemId) block(it) else it
@@ -1302,12 +1459,14 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onSelectAiDraft(itemId: String) {
         if (!_state.value.busy && _state.value.aiDrafts.any { it.itemId == itemId }) {
+            cancelAutoSave()
             _state.value = _state.value.copy(selectedAiDraftId = itemId, aiError = null)
         }
     }
 
     fun onDeleteAiDraft(itemId: String) {
         if (_state.value.busy) return
+        cancelAutoSave()
         val remaining = _state.value.aiDrafts.filter { it.itemId != itemId }
         _state.value = _state.value.copy(
             aiDrafts = remaining,
@@ -1365,6 +1524,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onCancelAiDraft() {
         if (_state.value.busy) return
+        cancelAutoSave()
         _state.value = _state.value.copy(
             aiDrafts = emptyList(),
             selectedAiDraftId = null,
@@ -1374,11 +1534,13 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     fun onConfirmAiDraft() {
+        cancelAutoSave()
         val inputs = buildAiInputs(forceInbox = false) ?: return
         saveAiInputs(inputs)
     }
 
     fun onConfirmAiDraftAsInbox() {
+        cancelAutoSave()
         val inputs = buildAiInputs(forceInbox = true) ?: return
         saveAiInputs(inputs)
     }
@@ -1442,7 +1604,8 @@ class TodoViewModel @JvmOverloads constructor(
         return inputs
     }
 
-    private fun saveAiInputs(inputs: List<TodoDraftInput>) {
+    private fun saveAiInputs(inputs: List<TodoDraftInput>, automatic: Boolean = false) {
+        cancelAutoSave()
         action {
             val results = useCases.confirmDrafts(inputs)
             _state.value = _state.value.copy(
@@ -1455,7 +1618,8 @@ class TodoViewModel @JvmOverloads constructor(
                 draftHasTime = false,
                 draftTime = null,
                 inputError = null,
-                message = "已保存 ${results.size} 条事项。" + when {
+                message = (if (automatic) "已自动保存 ${results.size} 条事项。"
+                else "已保存 ${results.size} 条事项。") + when {
                     results.any { it.outcome == ReminderOutcome.NotReady } ->
                         "部分提醒未就绪，请检查权限后重试"
                     results.any { it.outcome == ReminderOutcome.Scheduled } -> "已安排明确设置的提醒"
@@ -1468,6 +1632,8 @@ class TodoViewModel @JvmOverloads constructor(
                 voiceTextEditing = false,
                 voiceLimitReached = false,
                 voiceDiscardConfirmVisible = false,
+                autoSaveDeadline = null,
+                autoSaveRemainingMs = 0,
             )
             reload()
         }
@@ -1792,6 +1958,7 @@ class TodoViewModel @JvmOverloads constructor(
     override fun onCleared() {
         aiGeneration++
         aiJob?.cancel()
+        autoSaveJob?.cancel()
         cancelSpeechResources()
         super.onCleared()
     }
@@ -1803,6 +1970,8 @@ class TodoViewModel @JvmOverloads constructor(
         const val MAX_RECORDING_MS = 60_000L
         const val WAVEFORM_BARS = 36
         const val SPEECH_LEVEL = 0.035f
+        const val AUTO_SAVE_DELAY_MS = 2_000L
+        const val AUTO_SAVE_TICK_MS = 100L
     }
 }
 

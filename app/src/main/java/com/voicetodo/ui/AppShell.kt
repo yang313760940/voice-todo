@@ -43,6 +43,7 @@ internal fun VoiceTodoNavigationHost(
     pomodoroContent: @Composable () -> Unit,
     settingsContent: @Composable () -> Unit,
     todoHasUnsavedContent: () -> Boolean = { false },
+    onTodoTabLeaveAttempt: () -> Unit = {},
     onContinueTodoEditing: () -> Unit = {},
     onDiscardTodoDraft: () -> Unit = {},
 ) {
@@ -52,11 +53,14 @@ internal fun VoiceTodoNavigationHost(
 
     fun requestTab(tab: MainTab) {
         if (tab == selectedTab) return
-        if (selectedTab == MainTab.Todo && todoHasUnsavedContent()) {
-            pendingTab = tab
-        } else {
-            selectedTabIndex = tab.ordinal
+        if (selectedTab == MainTab.Todo) {
+            onTodoTabLeaveAttempt()
+            if (todoHasUnsavedContent()) {
+                pendingTab = tab
+                return
+            }
         }
+        selectedTabIndex = tab.ordinal
     }
 
     Surface(Modifier.fillMaxSize()) {

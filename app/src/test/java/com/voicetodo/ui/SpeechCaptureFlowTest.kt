@@ -38,10 +38,12 @@ import com.voicetodo.speech.FakeSpeechStreamFactory
 import com.voicetodo.speech.MemorySpeechSettingsStore
 import com.voicetodo.speech.SpeechEvent
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -253,7 +255,7 @@ class SpeechCaptureFlowTest {
     }
 
     @Test
-    fun `final transcription automatically organizes drafts and still waits for manual save`() {
+    fun `final transcription automatically organizes and saves once after two seconds`() {
         settingsStore.settings = configured()
         aiSettingsStore.settings = AiSettings(
             "https://api.example.com/v1", "test-model", "test" + "-key",
@@ -278,7 +280,23 @@ class SpeechCaptureFlowTest {
         assertEquals("识别完成后自动整理一次", 1, aiClient.calls)
         assertEquals("明天下午开会", vm.state.value.draftText)
         assertEquals("下午，三楼会议室", vm.state.value.aiDraft!!.note)
-        assertTrue("自动整理后仍需手动保存", vm.state.value.items.isEmpty())
+        assertTrue("倒计时期间尚未保存", vm.state.value.items.isEmpty())
+        assertTrue(vm.state.value.autoSaveDeadline != null)
+
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertEquals("开会", saved.title)
+        assertEquals(LocalDate.of(2026, 11, 7), saved.plannedDate)
+        assertTrue(saved.reminders.isEmpty())
+        assertFalse(vm.state.value.voicePanelOpen)
+        assertNull(vm.state.value.autoSaveDeadline)
+
+        vm.onAutoSaveTick()
+        waitFor { !vm.state.value.busy }
+        assertEquals("只自动保存一次", 1, vm.state.value.items.size)
     }
 
     @Test
@@ -430,6 +448,187 @@ class SpeechCaptureFlowTest {
             androidx.compose.ui.test.hasTestTag("repeat_none"),
         )
         compose.onNodeWithTag("repeat_none").assertExists()
+    }
+
+    @Test
+    fun `editing a draft cancels auto save and manual save still works`() {
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        prepareAutoSaveDraft("开会")
+        compose.onNodeWithTag("ai_autosave_countdown").assertExists()
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("ai_draft_title_field"),
+        )
+        compose.onNodeWithTag("ai_draft_title_field").performTextReplacement("改过的开会")
+        waitFor { vm.state.value.autoSaveDeadline == null }
+
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("ai_draft_confirm_button"),
+        )
+        compose.onNodeWithTag("ai_draft_confirm_button").performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+        assertEquals("改过的开会", vm.state.value.items.single().title)
+    }
+
+    @Test
+    fun `clicking countdown cancels auto save without restarting`() {
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        prepareAutoSaveDraft("倒计时")
+
+        compose.onNodeWithTag("ai_autosave_countdown").performClick()
+        waitFor { vm.state.value.autoSaveDeadline == null }
+        assertTrue(vm.state.value.message!!.contains("已取消自动保存"))
+
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+        assertNull(vm.state.value.autoSaveDeadline)
+    }
+
+    @Test
+    fun `close after countdown still asks to discard and cancels auto save`() {
+        prepareAutoSaveDraft("关闭确认")
+        vm.onRequestCloseVoicePanel()
+        idle()
+
+        assertNull(vm.state.value.autoSaveDeadline)
+        assertTrue(vm.state.value.voiceDiscardConfirmVisible)
+        assertTrue(vm.state.value.aiDrafts.isNotEmpty())
+
+        vm.onContinueVoiceEditing()
+        idle()
+        assertTrue(vm.state.value.voicePanelOpen)
+        assertTrue(vm.state.value.aiDrafts.isNotEmpty())
+        assertNull(vm.state.value.autoSaveDeadline)
+    }
+
+    @Test
+    fun `tab switch cancels auto save before asking to discard`() {
+        prepareAutoSaveDraft("切 tab")
+        vm.onTabSwitchAttempt()
+        idle()
+        assertNull(vm.state.value.autoSaveDeadline)
+        assertTrue(vm.state.value.aiDrafts.isNotEmpty())
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `app background cancels auto save and keeps obtained text`() {
+        prepareAutoSaveDraft("切后台")
+        vm.onAppBackgrounded()
+        idle()
+        assertNull(vm.state.value.autoSaveDeadline)
+        assertEquals("明天开会", vm.state.value.draftText)
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `sixty second limit never starts auto save even when organize succeeds`() {
+        settingsStore.settings = configured()
+        aiSettingsStore.settings = AiSettings(
+            "https://api.example.com/v1", "test-model", "test" + "-key",
+        )
+        aiClient.result = AiDraft(
+            sourceText = "说满六十秒",
+            title = "长录音",
+            plannedDate = "2026-11-07",
+        )
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("说满六十秒"))
+        clock.instant = clock.instant.plusMillis(60_100)
+        waitFor { stream.finished }
+        stream.emit(SpeechEvent.Final("说满六十秒"))
+        idle()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() && !vm.state.value.aiBusy }
+
+        assertTrue(vm.state.value.voiceLimitReached)
+        assertNull(vm.state.value.autoSaveDeadline)
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `organize failure never starts auto save`() {
+        settingsStore.settings = configured()
+        aiSettingsStore.settings = AiSettings(
+            "https://api.example.com/v1", "test-model", "test" + "-key",
+        )
+        aiClient.failure = com.voicetodo.ai.AiAssistException("整理失败")
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("整理失败的话"))
+        vm.onStopSpeech()
+        idle()
+        stream.emit(SpeechEvent.Final("整理失败的话"))
+        idle()
+        waitFor { vm.state.value.aiError != null && !vm.state.value.aiBusy }
+
+        assertNull(vm.state.value.autoSaveDeadline)
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `blocked draft pauses auto save until the user confirms`() {
+        settingsStore.settings = configured()
+        aiSettingsStore.settings = AiSettings(
+            "https://api.example.com/v1", "test-model", "test" + "-key",
+        )
+        aiClient.result = AiDraft(
+            sourceText = "三点或者四点开会",
+            title = "开会",
+            plannedDate = "2026-11-07",
+            clarification = "时间不确定：三点还是四点？",
+        )
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("三点或者四点开会"))
+        vm.onStopSpeech()
+        idle()
+        stream.emit(SpeechEvent.Final("三点或者四点开会"))
+        idle()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() && !vm.state.value.aiBusy }
+
+        assertNull(vm.state.value.autoSaveDeadline)
+        assertTrue(vm.state.value.aiError!!.contains("暂停自动保存"))
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    private fun prepareAutoSaveDraft(title: String) {
+        settingsStore.settings = configured()
+        aiSettingsStore.settings = AiSettings(
+            "https://api.example.com/v1", "test-model", "test" + "-key",
+        )
+        aiClient.result = AiDraft(
+            sourceText = "明天开会",
+            title = title,
+            plannedDate = "2026-11-07",
+        )
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("明天开会"))
+        vm.onStopSpeech()
+        idle()
+        stream.emit(SpeechEvent.Final("明天开会"))
+        idle()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() && vm.state.value.autoSaveDeadline != null }
     }
 
     private fun configured() = DoubaoSpeechSettings(

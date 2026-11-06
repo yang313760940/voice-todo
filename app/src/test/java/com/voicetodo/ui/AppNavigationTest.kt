@@ -60,6 +60,7 @@ class AppNavigationTest {
         var unsaved by mutableStateOf(true)
         var continued = 0
         var discarded = 0
+        var leaveAttempts = 0
         compose.setContent {
             MaterialTheme {
                 VoiceTodoNavigationHost(
@@ -68,6 +69,7 @@ class AppNavigationTest {
                     pomodoroContent = { Text("番茄页", Modifier.testTag("pomodoro_page")) },
                     settingsContent = { Text("我的页", Modifier.testTag("my_page")) },
                     todoHasUnsavedContent = { unsaved },
+                    onTodoTabLeaveAttempt = { leaveAttempts++ },
                     onContinueTodoEditing = { continued++ },
                     onDiscardTodoDraft = {
                         discarded++
@@ -80,6 +82,7 @@ class AppNavigationTest {
         compose.onNodeWithTag("nav_quadrant").performClick()
         compose.onNodeWithTag("nav_voice_discard_dialog").assertIsDisplayed()
         compose.onNodeWithTag("quadrant_page").assertDoesNotExist()
+        assert(leaveAttempts == 1)
 
         compose.onNodeWithTag("nav_continue_voice").performClick()
         compose.onNodeWithTag("todo_page").assertIsDisplayed()
@@ -89,5 +92,6 @@ class AppNavigationTest {
         compose.onNodeWithTag("nav_discard_voice").performClick()
         compose.onNodeWithTag("quadrant_page").assertIsDisplayed()
         assert(discarded == 1)
+        assert(leaveAttempts == 2)
     }
 }

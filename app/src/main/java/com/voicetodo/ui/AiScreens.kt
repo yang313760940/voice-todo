@@ -275,9 +275,28 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
         item {
             Text("AI 整理草稿", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "确认前不会创建事项，也不会安排闹钟。请核对原文、时间和提醒后再确认。",
+                "整理完成后会显示 2 秒倒计时；修改、关闭或离开都会取消自动保存，改为手动确认。",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+        if (state.autoSaveDeadline != null) {
+            item {
+                val seconds = ((state.autoSaveRemainingMs + 999) / 1_000).coerceAtLeast(1)
+                Card(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = enabled) { vm.onCancelAutoSave() }
+                        .testTag("ai_autosave_countdown"),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text("$seconds 秒后自动保存", fontWeight = FontWeight.Medium)
+                        Text(
+                            "点此倒计时或修改任一草稿都会取消自动保存。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
         }
         item {
             Card(Modifier.fillMaxWidth()) {

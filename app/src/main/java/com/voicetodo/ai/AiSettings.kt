@@ -58,6 +58,5 @@ data class AiSettings(
 data class AiPromptContext(
     val now: Instant,
     val zoneId: ZoneId,
-    /** 当前已有清单名称；只用于 AI 精确匹配，不发送事项内容。 */
     val listNames: List<String> = emptyList(),
 )

@@ -34,7 +34,6 @@ data class AiDraft(
     val itemId: String = UUID.randomUUID().toString(),
     val sourceText: String,
     val title: String,
-    /** 独立备注；与标题、时间、提醒分开，不进入通知正文。 */
     val note: String = "",
     val plannedDate: String = "",
     val dueAt: String = "",
@@ -45,11 +44,8 @@ data class AiDraft(
     val clarification: String? = null,
     val noReminderAcknowledged: Boolean = false,
     val recurrence: AiRecurrenceDraft? = null,
-    /** AI 点名的清单名称；客户端只与已有清单精确匹配，不自动新建。 */
     val listName: String = "",
-    /** 匹配成功后的清单 id；null 表示收集箱。 */
     val listId: String? = null,
-    /** 清单无法匹配时的提示；不影响时间澄清的阻塞状态。 */
     val listNotice: String? = null,
 ) {
     val hasUsableReminder: Boolean
@@ -58,7 +54,7 @@ data class AiDraft(
 
     /** 时间含糊且没有提醒时，用户必须补充提醒或明确选择不设提醒。 */
     val requiresNoReminderAcknowledgement: Boolean
-        get() = !clarification.isNullOrBlank() && !hasUsableReminder && !noReminderAcknowledged
+        get() = !clarification.isNullOrBlank() && !noReminderAcknowledged
 
     val recurrenceNeedsTime: Boolean
         get() = recurrence != null && recurrence.time.isBlank()

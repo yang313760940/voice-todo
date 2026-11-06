@@ -506,7 +506,7 @@ fun AiDraftScreen(vm: TodoViewModel, state: UiState, draft: AiDraft, enabled: Bo
                 )
             }
         }
-        if (draft.clarification != null && !draft.hasUsableReminder) {
+        if (draft.clarification != null) {
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

@@ -908,7 +908,6 @@ class TodoViewModel @JvmOverloads constructor(
         launchOrganize(current.draftText, settings, auto = false)
     }
 
-    /** 转写完成后自动整理；没有配置 AI 时保留文字与手动入口，不报错、不重试。 */
     private fun autoOrganizeAfterSpeech(source: String) {
         if (_state.value.aiBusy) return
         val settings = runCatching { aiSettingsStore.load() }.getOrNull() ?: return
@@ -962,10 +961,6 @@ class TodoViewModel @JvmOverloads constructor(
         }
     }
 
-    /**
-     * 客户端归属规则：只精确匹配已有清单名称；没有具体提醒时间（含只有时段）
-     * 的草稿一律放入收集箱。匹配不到时保留提示，不自动新建清单。
-     */
     private fun resolveAiDrafts(
         drafts: List<AiDraft>,
         source: String,
@@ -1006,7 +1001,11 @@ class TodoViewModel @JvmOverloads constructor(
     fun onAiDraftDueChange(value: String) = updateAiDraft { it.copy(dueAt = value) }
     fun onAiDraftQuadrantChange(quadrant: Quadrant) = updateAiDraft { it.copy(quadrant = quadrant) }
     fun onAiDraftClarificationAck(checked: Boolean) = updateAiDraft {
-        it.copy(noReminderAcknowledged = checked)
+        it.copy(
+            noReminderAcknowledged = checked,
+            reminders = if (checked) emptyList() else it.reminders,
+            recurrence = if (checked) null else it.recurrence,
+        )
     }
 
     private fun updateAiDraft(block: (AiDraft) -> AiDraft) {
@@ -1098,10 +1097,6 @@ class TodoViewModel @JvmOverloads constructor(
         saveAiInputs(inputs)
     }
 
-    /**
-     * 阻塞状态的一键路径：保留标题、备注与计划日期，清空提醒和重复规则，
-     * 全部放入收集箱后整批保存。
-     */
     fun onConfirmAiDraftAsInbox() {
         val inputs = buildAiInputs(forceInbox = true) ?: return
         saveAiInputs(inputs)
@@ -1109,17 +1104,17 @@ class TodoViewModel @JvmOverloads constructor(
 
     private fun buildAiInputs(forceInbox: Boolean): List<TodoDraftInput>? {
         if (_state.value.busy || _state.value.aiDrafts.isEmpty()) return null
-        val targetListId = _state.value.addTargetListId
         val today = clock.now().atZone(zoneId).toLocalDate()
         val inputs = mutableListOf<TodoDraftInput>()
         for ((index, draft) in _state.value.aiDrafts.withIndex()) {
             try {
                 if (forceInbox) {
                     require(draft.title.isNotBlank()) { "标题不能为空" }
+                    val plannedDate = draft.plannedDate.trim().takeIf { it.isNotEmpty() }
+                        ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
                     val edit = TodoEdit(
                         title = draft.title.trim(),
-                        plannedDate = draft.plannedDate.trim().takeIf { it.isNotEmpty() }
-                            ?.let(LocalDate::parse),
+                        plannedDate = plannedDate,
                         dueAt = null,
                         remindAt = null,
                         reminders = emptyList(),
@@ -1139,7 +1134,7 @@ class TodoViewModel @JvmOverloads constructor(
                         "时间还不明确：请补充提醒时间，或勾选“确认不设提醒”"
                     }
                     val noReminder = draft.reminders.isEmpty() && draft.recurrence == null
-                    val listId = if (noReminder) null else draft.listId ?: targetListId
+                    val listId = if (noReminder) null else draft.listId
                     val edit = draft.toTodoEdit(zoneId).copy(listId = listId, updateList = true)
                     require(edit.title.isNotBlank()) { "标题不能为空" }
                     edit.reminders.orEmpty().forEach { reminder ->

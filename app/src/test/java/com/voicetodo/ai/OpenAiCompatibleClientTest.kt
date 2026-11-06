@@ -84,6 +84,11 @@ class OpenAiCompatibleClientTest {
                 .getString("content")
             assertTrue(userText.contains("已有清单：工作、健康"))
             assertFalse("不发送历史事项", userText.contains("历史事项"))
+            val systemText = JSONObject(server.requests.single().body)
+                .getJSONArray("messages")
+                .getJSONObject(0)
+                .getString("content")
+            assertTrue(systemText.contains("只采用最后一次说法"))
         }
     }
 

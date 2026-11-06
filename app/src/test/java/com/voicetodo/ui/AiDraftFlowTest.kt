@@ -468,6 +468,9 @@ class AiDraftFlowTest {
             note = "下午去",
             listName = "不存在的清单",
             plannedDate = "2026-11-06",
+            reminders = listOf(
+                AiReminderDraft(kind = AiReminderKind.Specified, value = "2026-11-06 14:00"),
+            ),
         )
         typeText("明天下午去不存在的清单买菜")
         clickAi()
@@ -486,8 +489,8 @@ class AiDraftFlowTest {
         assertNull(saved.listId)
         assertEquals("下午去", saved.note)
         assertEquals(java.time.LocalDate.of(2026, 11, 6), saved.plannedDate)
-        assertTrue(saved.reminders.isEmpty())
-        assertNull(saved.remindAt)
+        assertEquals(1, saved.reminders.size)
+        assertNotNull(saved.remindAt)
     }
 
     @Test
@@ -534,6 +537,30 @@ class AiDraftFlowTest {
         assertNull(saved.remindAt)
         assertTrue(saved.reminders.isEmpty())
         assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `inbox-all button drops an invalid date and still saves the draft`() {
+        configureStore()
+        aiClient.result = AiDraft(
+            sourceText = "2月30日聚会",
+            title = "聚会",
+            plannedDate = "2026-02-30",
+            clarification = "计划日期无法识别，请修改",
+        )
+        typeText("2月30日聚会")
+        clickAi()
+        waitFor { vm.state.value.aiDrafts.size == 1 && !vm.state.value.aiBusy }
+
+        compose.onNodeWithTag("ai_draft_screen").performScrollToNode(hasTestTag("ai_inbox_all_button"))
+        compose.onNodeWithTag("ai_inbox_all_button").performClick()
+        waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single()
+        assertEquals("聚会", saved.title)
+        assertNull(saved.plannedDate)
+        assertNull(saved.listId)
+        assertTrue(saved.reminders.isEmpty())
     }
 
     @Test

@@ -43,6 +43,6 @@ class RecordedScheduler(
 }
 
 /** 冻结时钟。 */
-class FrozenClock(var instant: Instant) : Clock {
+class FrozenClock(@Volatile var instant: Instant) : Clock {
     override fun now(): Instant = instant
 }

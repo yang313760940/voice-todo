@@ -601,8 +601,7 @@ class TodoScreenTest {
 
     private fun openAdd() {
         if (vm.state.value.addOpen) return
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("text_add_button"))
-        compose.onNodeWithTag("text_add_button").performClick()
+        compose.runOnIdle { vm.onOpenAdd() }
         waitFor { vm.state.value.addOpen }
     }
 }

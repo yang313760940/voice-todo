@@ -55,4 +55,39 @@ class AppNavigationTest {
         compose.onNodeWithTag("nav_todo").performClick()
         compose.onNodeWithTag("todo_nav_state").assertTextContains("保留草稿")
     }
+
+    @Test fun switchingTabsWithUnsavedVoiceContentRequiresAChoice() {
+        var unsaved by mutableStateOf(true)
+        var continued = 0
+        var discarded = 0
+        compose.setContent {
+            MaterialTheme {
+                VoiceTodoNavigationHost(
+                    todoContent = { Text("待办页", Modifier.testTag("todo_page")) },
+                    quadrantContent = { Text("四象限页", Modifier.testTag("quadrant_page")) },
+                    pomodoroContent = { Text("番茄页", Modifier.testTag("pomodoro_page")) },
+                    settingsContent = { Text("我的页", Modifier.testTag("my_page")) },
+                    todoHasUnsavedContent = { unsaved },
+                    onContinueTodoEditing = { continued++ },
+                    onDiscardTodoDraft = {
+                        discarded++
+                        unsaved = false
+                    },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        compose.onNodeWithTag("nav_voice_discard_dialog").assertIsDisplayed()
+        compose.onNodeWithTag("quadrant_page").assertDoesNotExist()
+
+        compose.onNodeWithTag("nav_continue_voice").performClick()
+        compose.onNodeWithTag("todo_page").assertIsDisplayed()
+        assert(continued == 1)
+
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        compose.onNodeWithTag("nav_discard_voice").performClick()
+        compose.onNodeWithTag("quadrant_page").assertIsDisplayed()
+        assert(discarded == 1)
+    }
 }

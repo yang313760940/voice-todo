@@ -3,22 +3,37 @@ package com.voicetodo.ui
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,6 +56,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 
 internal val timeFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
@@ -52,61 +68,85 @@ fun TodoScreen(vm: TodoViewModel) {
         onPauseOrDispose { }
     }
     val modalOpen = state.aiSettingsForm != null || state.aiDraft != null ||
-        state.detail != null || state.addOpen || state.pendingRecurringDeleteId != null
+        state.detail != null || state.addOpen || state.pendingRecurringDeleteId != null ||
+        state.voiceDiscardConfirmVisible
     BackHandler(enabled = modalOpen) {
         when {
+            state.voiceDiscardConfirmVisible -> vm.onContinueVoiceEditing()
             state.aiSettingsForm != null -> vm.onCloseAiSettings()
-            state.aiDraft != null -> vm.onCancelAiDraft()
+            state.aiDraft != null ->
+                if (state.voicePanelOpen) vm.onRequestCloseVoicePanel() else vm.onCancelAiDraft()
             state.detail != null -> vm.onCancelDetail()
-            state.addOpen -> vm.onCloseAdd()
+            state.addOpen ->
+                if (state.voicePanelOpen) vm.onRequestCloseVoicePanel() else vm.onCloseAdd()
             state.pendingRecurringDeleteId != null -> vm.onCancelRecurringDelete()
         }
     }
     val baseEnabled = !state.loading && !state.busy && state.storageError == null
     val enabled = baseEnabled && !state.aiBusy
-    state.aiSettingsForm?.let {
-        AiSettingsScreen(vm, state, it)
-        return
-    }
-    state.aiDraft?.let {
-        AiDraftScreen(vm, state, it, enabled)
-        return
-    }
+    val aiSettingsForm = state.aiSettingsForm
+    val aiDraft = state.aiDraft
     val detail = state.detail
-    if (detail != null) {
-        DetailScreen(vm, state, detail, enabled)
-        return
-    }
-    if (state.addOpen) {
-        AddTodoScreen(vm, state, enabled)
-        return
-    }
-    TodoHomeScreen(vm, state, enabled)
-    if (state.pendingRecurringDeleteId != null) {
-        AlertDialog(
-            onDismissRequest = vm::onCancelRecurringDelete,
-            title = { Text("删除重复事项") },
-            text = { Text("请选择只删除这一次，还是删除本次及以后的未完成实例。已完成历史会保留。") },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Box(Modifier.fillMaxSize()) {
+        when {
+            aiSettingsForm != null -> AiSettingsScreen(vm, state, aiSettingsForm)
+            aiDraft != null -> AiDraftScreen(vm, state, aiDraft, enabled)
+            detail != null -> DetailScreen(vm, state, detail, enabled)
+            state.addOpen && !state.voicePanelOpen -> AddTodoScreen(vm, state, enabled)
+            else -> {
+                TodoHomeScreen(vm, state, enabled)
+                if (state.voicePanelOpen) VoiceCapturePanel(vm, state, enabled)
+            }
+        }
+        if (state.pendingRecurringDeleteId != null) {
+            AlertDialog(
+                onDismissRequest = vm::onCancelRecurringDelete,
+                title = { Text("删除重复事项") },
+                text = { Text("请选择只删除这一次，还是删除本次及以后的未完成实例。已完成历史会保留。") },
+                confirmButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisOnly) },
+                            modifier = Modifier.testTag("delete_scope_this"),
+                        ) { Text("仅删除本次") }
+                        TextButton(
+                            onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisAndFuture) },
+                            modifier = Modifier.testTag("delete_scope_future"),
+                        ) { Text("本次及以后") }
+                    }
+                },
+                dismissButton = {
                     TextButton(
-                        onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisOnly) },
-                        modifier = Modifier.testTag("delete_scope_this"),
-                    ) { Text("仅删除本次") }
+                        onClick = vm::onCancelRecurringDelete,
+                        modifier = Modifier.testTag("delete_scope_cancel"),
+                    ) { Text("取消") }
+                },
+                modifier = Modifier.testTag("delete_scope_dialog"),
+            )
+        }
+        if (state.voiceDiscardConfirmVisible) {
+            AlertDialog(
+                onDismissRequest = vm::onContinueVoiceEditing,
+                title = { Text("放弃本次语音内容？") },
+                text = { Text("当前识别文字或草稿尚未保存。选择继续可保留面板并改为手动保存。") },
+                confirmButton = {
                     TextButton(
-                        onClick = { vm.onConfirmRecurringDelete(RecurringDeleteScope.ThisAndFuture) },
-                        modifier = Modifier.testTag("delete_scope_future"),
-                    ) { Text("本次及以后") }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = vm::onCancelRecurringDelete,
-                    modifier = Modifier.testTag("delete_scope_cancel"),
-                ) { Text("取消") }
-            },
-            modifier = Modifier.testTag("delete_scope_dialog"),
-        )
+                        onClick = vm::onDiscardVoiceDraft,
+                        modifier = Modifier.testTag("voice_discard_confirm"),
+                    ) { Text("放弃内容") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = vm::onContinueVoiceEditing,
+                        modifier = Modifier.testTag("voice_discard_continue"),
+                    ) { Text("继续编辑") }
+                },
+                modifier = Modifier.testTag("voice_discard_dialog"),
+            )
+        }
+        if (state.speechConsentVisible) {
+            SpeechConsentDialog(vm)
+        }
     }
 }
 
@@ -126,11 +166,12 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
     val title = viewTitle(state.selectedView, state.todoLists)
     val emptyText = emptyViewText(state.selectedView)
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
-        contentPadding = PaddingValues(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -227,26 +268,6 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
                 )
             }
         }
-        item {
-            Button(
-                onClick = { vm.onOpenAdd(startVoice = true) },
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth().height(56.dp).testTag("voice_add_button"),
-            ) {
-                Icon(Icons.Default.Mic, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("语音添加事项")
-            }
-            OutlinedButton(
-                onClick = { vm.onOpenAdd(startVoice = false) },
-                enabled = enabled,
-                modifier = Modifier.fillMaxWidth().testTag("text_add_button"),
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("文字添加")
-            }
-        }
         if (state.selectedView.supportsUnscheduledFilter) {
             item {
                 FilterChip(
@@ -308,7 +329,331 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
                 }
             }
         }
+        }
+        VoiceMicButton(
+            enabled = enabled,
+            onClick = { vm.onOpenAdd(startVoice = true) },
+            onLongClick = { vm.onOpenFullManualForm() },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+        )
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VoiceMicButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 6.dp,
+        modifier = modifier
+            .size(56.dp)
+            .testTag("voice_mic_button")
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Default.Mic,
+                contentDescription = "语音添加；长按打开完整手动表单",
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceCapturePanel(vm: TodoViewModel, state: UiState, enabled: Boolean) {
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    Box(Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f),
+            modifier = Modifier.fillMaxSize().clickable {
+                vm.onRequestCloseVoicePanel()
+            },
+        ) {}
+        AnimatedVisibility(
+            visible = true,
+            enter = slideInVertically(initialOffsetY = { it }),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Surface(
+                tonalElevation = 6.dp,
+                shape = MaterialTheme.shapes.extraLarge,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.92f)
+                    .offset { IntOffset(0, dragOffset.roundToInt()) }
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                if (dragOffset >= 96.dp.toPx()) vm.onRequestCloseVoicePanel()
+                                dragOffset = 0f
+                            },
+                            onDragCancel = { dragOffset = 0f },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                dragOffset = (dragOffset + amount).coerceAtLeast(0f)
+                            },
+                        )
+                    }
+                    .testTag("voice_panel"),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp)
+                            .testTag("voice_drag_handle")
+                            .pointerInput(Unit) {
+                                detectVerticalDragGestures(
+                                    onDragEnd = {
+                                        if (dragOffset >= 96.dp.toPx()) {
+                                            vm.onRequestCloseVoicePanel()
+                                        }
+                                        dragOffset = 0f
+                                    },
+                                    onDragCancel = { dragOffset = 0f },
+                                    onVerticalDrag = { change, amount ->
+                                        change.consume()
+                                        dragOffset = (dragOffset + amount).coerceAtLeast(0f)
+                                    },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                            shape = CircleShape,
+                            modifier = Modifier.width(40.dp).height(4.dp),
+                        ) {}
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("语音添加", style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                "豆包在线转写 · 录音不会保存到本机",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        IconButton(
+                            onClick = vm::onRequestCloseVoicePanel,
+                            modifier = Modifier.testTag("voice_close_button"),
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭语音面板")
+                        }
+                    }
+
+                    if (!state.speechConfigured) {
+                        Text(
+                            "语音识别未配置；请先在“我的 → 语音与 AI”填写凭据，或点小笔直接输入。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("voice_unavailable_notice"),
+                        )
+                        TextButton(
+                            onClick = vm::onOpenAiSettings,
+                            enabled = enabled,
+                            modifier = Modifier.testTag("voice_open_settings"),
+                        ) { Text("去配置") }
+                    }
+
+                    Text("识别文字", fontWeight = FontWeight.Medium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (state.voiceTextEditing) {
+                            OutlinedTextField(
+                                value = state.draftText,
+                                onValueChange = vm::onDraftTextChange,
+                                enabled = enabled,
+                                minLines = 2,
+                                placeholder = { Text("直接输入事项文字…") },
+                                modifier = Modifier.weight(1f).testTag("voice_edit_text"),
+                            )
+                        } else {
+                            Text(
+                                state.draftText.ifBlank { "还没有识别到文字，可点小笔直接输入" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f).testTag("voice_partial_text"),
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (state.voiceTextEditing) vm.onFinishVoiceTextEdit()
+                                else vm.onEditVoiceText()
+                            },
+                            enabled = enabled,
+                            modifier = Modifier.testTag("voice_edit_pen"),
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = if (state.voiceTextEditing) {
+                                    "完成文字编辑"
+                                } else {
+                                    "编辑识别文字；录音中点击会停止录音"
+                                },
+                            )
+                        }
+                    }
+
+                    VoiceWaveform(
+                        levels = state.voiceWaveform,
+                        modifier = Modifier.fillMaxWidth().height(68.dp).testTag("voice_waveform"),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            formatVoiceDuration(state.voiceElapsedMs),
+                            style = MaterialTheme.typography.headlineSmall,
+                            modifier = Modifier.testTag("voice_duration"),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            when (state.speechState) {
+                                SpeechUiState.Connecting -> "正在连接豆包…"
+                                SpeechUiState.Recording -> if (state.voiceHasSpoken) {
+                                    "正在聆听；停顿 2 秒或 60 秒后自动结束"
+                                } else {
+                                    "请开始说话；10 秒未开口会自动停止"
+                                }
+                                SpeechUiState.Finishing -> "正在等待最终识别结果…"
+                                SpeechUiState.Failed -> "录音已失败，文字仍可修改"
+                                SpeechUiState.Idle -> if (state.draftText.isBlank()) {
+                                    "可点小笔直接输入"
+                                } else {
+                                    "识别已结束；请核对后手动保存"
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("voice_status"),
+                        )
+                    }
+
+                    if (state.voiceLimitReached) {
+                        Text(
+                            "已达到 60 秒上限，内容可能还没说完。",
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("voice_limit_notice"),
+                        )
+                    }
+                    state.inputError?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("voice_input_error"),
+                        )
+                    }
+                    state.message?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.testTag("voice_message"),
+                        )
+                    }
+
+                    if (state.speechState == SpeechUiState.Recording ||
+                        state.speechState == SpeechUiState.Connecting
+                    ) {
+                        Button(
+                            onClick = vm::onStopSpeech,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("voice_stop_button"),
+                        ) { Text("结束录音") }
+                    }
+                    if (state.speechState == SpeechUiState.Failed) {
+                        OutlinedButton(
+                            onClick = vm::onStartSpeech,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth().testTag("voice_retry_button"),
+                        ) { Text("重新录音") }
+                    }
+                    OutlinedButton(
+                        onClick = vm::onOpenManualCreate,
+                        enabled = enabled && state.draftText.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().testTag("voice_manual_button"),
+                    ) { Text("填写完整详情并保存") }
+                    TextButton(
+                        onClick = vm::onSaveWithoutReminder,
+                        enabled = enabled && state.draftText.isNotBlank() &&
+                            state.speechState == SpeechUiState.Idle,
+                        modifier = Modifier.fillMaxWidth().testTag("voice_save_inbox_button"),
+                    ) { Text("存入收集箱、不设提醒") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceWaveform(levels: List<Float>, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.primary
+    Canvas(modifier) {
+        val bars = levels.takeLast(36).ifEmpty { List(36) { 0f } }
+        val gap = 3.dp.toPx()
+        val barWidth = ((size.width - gap * (bars.size - 1)) / bars.size).coerceAtLeast(1f)
+        bars.forEachIndexed { index, raw ->
+            val height = (raw.coerceIn(0f, 1f) * size.height).coerceAtLeast(3.dp.toPx())
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(index * (barWidth + gap), (size.height - height) / 2f),
+                size = Size(barWidth, height),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
+            )
+        }
+    }
+}
+
+private fun formatVoiceDuration(elapsedMs: Long): String {
+    val totalSeconds = (elapsedMs / 1_000).coerceAtLeast(0)
+    return "%02d:%02d".format(Locale.ROOT, totalSeconds / 60, totalSeconds % 60)
+}
+
+@Composable
+private fun SpeechConsentDialog(vm: TodoViewModel) {
+    AlertDialog(
+        onDismissRequest = vm::onCancelSpeechConsent,
+        title = { Text("录音和文字将上传到豆包") },
+        text = {
+            Text(
+                "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到豆包语音服务，" +
+                    "用于转写当前事项。音频不会保存到本机，也不会发送到其他服务。",
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = vm::onConfirmSpeechConsent,
+                modifier = Modifier.testTag("speech_consent_confirm"),
+            ) { Text("同意并开始") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = vm::onCancelSpeechConsent,
+                modifier = Modifier.testTag("speech_consent_cancel"),
+            ) { Text("取消") }
+        },
+        modifier = Modifier.testTag("speech_consent_dialog"),
+    )
 }
 
 @Composable

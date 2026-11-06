@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
@@ -179,21 +181,26 @@ class TodoHomeTest {
         assertEquals("工作", work.name)
         selectView("view_list_${work.id}")
 
-        compose.onNodeWithTag("text_add_button").performClick()
-        waitFor { vm.state.value.addOpen }
-        compose.onNodeWithTag("add_target").assertTextContains("工作", substring = true)
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("title_field"))
-        compose.onNodeWithTag("title_field").performTextReplacement("清单内文字添加")
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("save_without_reminder_button"))
-        compose.onNodeWithTag("save_without_reminder_button").performClick()
+        compose.onNodeWithTag("voice_mic_button").performTouchInput { longClick() }
+        waitFor { vm.state.value.detail?.original == null && vm.state.value.detail != null }
+        compose.onNodeWithTag("detail_list_selector").assertTextContains("工作", substring = true)
+        compose.onNodeWithTag("detail_note_field").assertExists()
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_plannedDate_field"))
+        compose.onNodeWithTag("detail_plannedDate_field").assertExists()
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("repeat_none"))
+        compose.onNodeWithTag("repeat_none").assertExists()
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_title_field"))
+        compose.onNodeWithTag("detail_title_field").performTextReplacement("清单内文字添加")
+        compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_save_button"))
+        compose.onNodeWithTag("detail_save_button").performClick()
         waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
         assertEquals(work.id, vm.state.value.items.single().listId)
         compose.onNodeWithText("清单内文字添加").assertExists()
 
-        compose.onNodeWithTag("voice_add_button").performClick()
+        compose.onNodeWithTag("voice_mic_button").performClick()
         waitFor { vm.state.value.addOpen }
-        compose.onNodeWithTag("voice_unavailable_notice").assertExists()
-        compose.onNodeWithTag("add_cancel_button").performClick()
+        compose.onNodeWithTag("voice_input_error").assertExists()
+        compose.onNodeWithTag("voice_close_button").performClick()
         waitFor { !vm.state.value.addOpen }
         assertEquals(1, vm.state.value.items.size)
     }

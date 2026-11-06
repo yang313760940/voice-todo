@@ -48,9 +48,11 @@ import com.voicetodo.speech.SpeechSettingsStore
 import com.voicetodo.speech.SpeechStream
 import com.voicetodo.speech.SpeechStreamFactory
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -214,6 +216,13 @@ data class UiState(
     val speechState: SpeechUiState = SpeechUiState.Idle,
     val speechPartialText: String = "",
     val speechConsentVisible: Boolean = false,
+    val voicePanelOpen: Boolean = false,
+    val voiceElapsedMs: Long = 0,
+    val voiceWaveform: List<Float> = emptyList(),
+    val voiceHasSpoken: Boolean = false,
+    val voiceTextEditing: Boolean = false,
+    val voiceLimitReached: Boolean = false,
+    val voiceDiscardConfirmVisible: Boolean = false,
     val seriesLabels: Map<String, String> = emptyMap(),
     val missedReminders: List<MissedReminder> = emptyList(),
     /** 删除重复实例前等待用户选择作用范围。 */
@@ -258,6 +267,9 @@ class TodoViewModel @JvmOverloads constructor(
     private var speechStream: SpeechStream? = null
     private var speechRecorder: SpeechRecorder? = null
     private var speechGeneration = 0L
+    private var voiceTimerJob: Job? = null
+    private var voiceStartedAt: Instant? = null
+    @Volatile private var voiceLastSpeechAt: Instant? = null
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -314,6 +326,13 @@ class TodoViewModel @JvmOverloads constructor(
             speechState = SpeechUiState.Idle,
             speechPartialText = "",
             speechConsentVisible = false,
+            voicePanelOpen = false,
+            voiceElapsedMs = 0,
+            voiceWaveform = emptyList(),
+            voiceHasSpoken = false,
+            voiceTextEditing = false,
+            voiceLimitReached = false,
+            voiceDiscardConfirmVisible = false,
             pendingRecurringDeleteId = null,
             message = null,
         )
@@ -394,6 +413,13 @@ class TodoViewModel @JvmOverloads constructor(
             speechState = SpeechUiState.Idle,
             speechPartialText = "",
             speechConsentVisible = false,
+            voicePanelOpen = startVoice,
+            voiceElapsedMs = 0,
+            voiceWaveform = emptyList(),
+            voiceHasSpoken = false,
+            voiceTextEditing = false,
+            voiceLimitReached = false,
+            voiceDiscardConfirmVisible = false,
         )
         if (startVoice) onStartSpeech()
     }
@@ -414,6 +440,13 @@ class TodoViewModel @JvmOverloads constructor(
             speechState = SpeechUiState.Idle,
             speechPartialText = "",
             speechConsentVisible = false,
+            voicePanelOpen = false,
+            voiceElapsedMs = 0,
+            voiceWaveform = emptyList(),
+            voiceHasSpoken = false,
+            voiceTextEditing = false,
+            voiceLimitReached = false,
+            voiceDiscardConfirmVisible = false,
         )
     }
 
@@ -450,7 +483,11 @@ class TodoViewModel @JvmOverloads constructor(
 
     fun onDraftTextChange(text: String) {
         invalidateAiRequest()
-        _state.value = _state.value.copy(draftText = text, inputError = null)
+        _state.value = _state.value.copy(
+            draftText = text,
+            inputError = null,
+            voiceTextEditing = _state.value.voiceTextEditing || _state.value.voicePanelOpen,
+        )
     }
 
     /** 点击语音入口或录音面板的“开始录音”。首次使用会先请求上传告知。 */
@@ -473,6 +510,7 @@ class TodoViewModel @JvmOverloads constructor(
             speechConfigured = true,
             inputError = null,
             message = null,
+            voiceDiscardConfirmVisible = false,
         )
         if (!settings.uploadAcknowledged) {
             _state.value = _state.value.copy(speechConsentVisible = true)
@@ -537,7 +575,15 @@ class TodoViewModel @JvmOverloads constructor(
             inputError = null,
             message = null,
             speechConsentVisible = false,
+            voiceElapsedMs = 0,
+            voiceWaveform = emptyList(),
+            voiceHasSpoken = false,
+            voiceTextEditing = false,
+            voiceLimitReached = false,
+            voiceDiscardConfirmVisible = false,
         )
+        voiceStartedAt = clock.now()
+        voiceLastSpeechAt = null
         speechJob = viewModelScope.launch {
             stream.events.collect { event ->
                 if (generation == speechGeneration) onSpeechEvent(event)
@@ -545,7 +591,10 @@ class TodoViewModel @JvmOverloads constructor(
         }
         stream.start("zh-CN")
         val started = recorder.start { chunk ->
-            if (generation == speechGeneration) stream.pushPcm(chunk)
+            if (generation == speechGeneration) {
+                stream.pushPcm(chunk)
+                onSpeechAudio(chunk, generation)
+            }
         }
         if (!started) {
             stream.cancel()
@@ -557,7 +606,113 @@ class TodoViewModel @JvmOverloads constructor(
                 speechState = SpeechUiState.Failed,
                 inputError = "无法启动麦克风；请检查录音权限或其他应用是否占用麦克风",
             )
+        } else {
+            startVoiceTimer(generation)
         }
+    }
+
+    private fun onSpeechAudio(pcm: ByteArray, generation: Long) {
+        val level = pcmLevel(pcm)
+        val spoke = level >= SPEECH_LEVEL
+        val now = clock.now()
+        if (spoke) voiceLastSpeechAt = now
+        _state.update { current ->
+            if (generation != speechGeneration || !current.voicePanelOpen ||
+                current.speechState == SpeechUiState.Idle
+            ) {
+                current
+            } else {
+                current.copy(
+                    voiceElapsedMs = elapsedMillis(now),
+                    voiceHasSpoken = current.voiceHasSpoken || spoke,
+                    voiceWaveform = (current.voiceWaveform + level.coerceIn(0f, 1f))
+                        .takeLast(WAVEFORM_BARS),
+                )
+            }
+        }
+    }
+
+    private fun startVoiceTimer(generation: Long) {
+        voiceTimerJob?.cancel()
+        voiceTimerJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                delay(VOICE_TICK_MS)
+                if (generation != speechGeneration) break
+                onVoiceTick()
+                val state = _state.value
+                if (state.speechState != SpeechUiState.Recording &&
+                    state.speechState != SpeechUiState.Connecting
+                ) break
+            }
+        }
+    }
+
+    /** 统一的录音计时入口；测试推进时钟后可直接调用。 */
+    internal fun onVoiceTick() {
+        val current = _state.value
+        if (current.speechState != SpeechUiState.Recording &&
+            current.speechState != SpeechUiState.Connecting
+        ) return
+        val now = clock.now()
+        val elapsed = elapsedMillis(now)
+        _state.update {
+            if (it.voicePanelOpen) it.copy(voiceElapsedMs = elapsed) else it
+        }
+        when {
+            elapsed >= MAX_RECORDING_MS -> stopVoiceCapture(
+                "已达到 60 秒录音上限，内容可能尚未说完；请核对文字后手动保存",
+                limitReached = true,
+            )
+            !current.voiceHasSpoken && elapsed >= NO_SPEECH_TIMEOUT_MS -> stopEmptyVoiceCapture()
+            current.voiceHasSpoken -> {
+                val lastSpeech = voiceLastSpeechAt ?: return
+                if (now.toEpochMilli() - lastSpeech.toEpochMilli() >= SILENCE_AFTER_SPEECH_MS) {
+                    stopVoiceCapture("连续 2 秒未检测到说话，已自动结束录音")
+                }
+            }
+        }
+    }
+
+    private fun stopVoiceCapture(reason: String, limitReached: Boolean = false) {
+        voiceTimerJob?.cancel()
+        voiceTimerJob = null
+        if (_state.value.speechState != SpeechUiState.Recording &&
+            _state.value.speechState != SpeechUiState.Connecting
+        ) return
+        onStopSpeech()
+        _state.update {
+            it.copy(
+                message = reason,
+                voiceLimitReached = it.voiceLimitReached || limitReached,
+            )
+        }
+    }
+
+    /** 未开口时直接取消会话，避免把空音频送去转写或整理。 */
+    private fun stopEmptyVoiceCapture() {
+        voiceTimerJob?.cancel()
+        voiceTimerJob = null
+        speechRecorder?.stop()
+        speechRecorder = null
+        speechStream?.cancel()
+        speechStream = null
+        speechJob?.cancel()
+        speechJob = null
+        voiceStartedAt = null
+        voiceLastSpeechAt = null
+        _state.update {
+            it.copy(
+                speechState = SpeechUiState.Idle,
+                speechPartialText = "",
+                inputError = null,
+                message = "10 秒内未检测到说话，录音已停止；可点小笔直接输入",
+            )
+        }
+    }
+
+    private fun elapsedMillis(now: Instant): Long {
+        val started = voiceStartedAt ?: return 0
+        return (now.toEpochMilli() - started.toEpochMilli()).coerceAtLeast(0)
     }
 
     private fun onSpeechEvent(event: SpeechEvent) {
@@ -568,31 +723,49 @@ class TodoViewModel @JvmOverloads constructor(
                 }
             }
             is SpeechEvent.Partial -> {
-                _state.value = _state.value.copy(
-                    draftText = event.text,
+                voiceLastSpeechAt = clock.now()
+                _state.update {
+                    it.copy(
+                    draftText = if (it.voiceTextEditing) it.draftText else event.text,
                     speechPartialText = event.text,
-                    speechState = if (_state.value.speechState == SpeechUiState.Connecting) {
+                    speechState = if (it.speechState == SpeechUiState.Connecting) {
                         SpeechUiState.Recording
                     } else {
-                        _state.value.speechState
+                        it.speechState
                     },
-                )
+                    voiceHasSpoken = true,
+                    )
+                }
             }
             is SpeechEvent.Final -> {
+                voiceTimerJob?.cancel()
+                voiceTimerJob = null
+                voiceStartedAt = null
+                voiceLastSpeechAt = null
                 speechRecorder?.release()
                 speechRecorder = null
                 speechStream = null
-                val finalText = event.text.ifBlank { _state.value.draftText }
-                _state.value = _state.value.copy(
+                val current = _state.value
+                val edited = current.voiceTextEditing
+                val finalText = if (edited) current.draftText else event.text.ifBlank { current.draftText }
+                _state.value = current.copy(
                     draftText = finalText,
                     speechPartialText = "",
                     speechState = SpeechUiState.Idle,
                     inputError = null,
-                    message = "识别完成；请核对文字后手动保存",
+                    message = when {
+                        edited -> "录音已停止；可继续编辑文字后手动保存"
+                        finalText.isBlank() -> current.message ?: "未识别到文字；可点小笔直接输入"
+                        else -> "识别完成；请核对文字后手动保存"
+                    },
                 )
-                if (finalText.isNotBlank()) autoOrganizeAfterSpeech(finalText)
+                if (finalText.isNotBlank() && !edited) autoOrganizeAfterSpeech(finalText)
             }
             is SpeechEvent.Failure -> {
+                voiceTimerJob?.cancel()
+                voiceTimerJob = null
+                voiceStartedAt = null
+                voiceLastSpeechAt = null
                 speechRecorder?.release()
                 speechRecorder = null
                 speechStream = null
@@ -616,6 +789,8 @@ class TodoViewModel @JvmOverloads constructor(
         if (current.speechState != SpeechUiState.Recording &&
             current.speechState != SpeechUiState.Connecting
         ) return
+        voiceTimerJob?.cancel()
+        voiceTimerJob = null
         speechRecorder?.stop()
         speechRecorder = null
         _state.value = current.copy(
@@ -643,6 +818,87 @@ class TodoViewModel @JvmOverloads constructor(
             speechConsentVisible = false,
             message = if (hadText) "已取消录音，文字已保留" else null,
         )
+    }
+
+    /** 小笔入口：立即停止当前录音，保留已有文字并进入可编辑状态。 */
+    fun onEditVoiceText() {
+        if (_state.value.speechState == SpeechUiState.Recording ||
+            _state.value.speechState == SpeechUiState.Connecting
+        ) {
+            onStopSpeech()
+        }
+        _state.update {
+            it.copy(voiceTextEditing = true, voiceDiscardConfirmVisible = false)
+        }
+    }
+
+    fun onFinishVoiceTextEdit() {
+        _state.update { it.copy(voiceTextEditing = false) }
+    }
+
+    fun hasUnsavedVoiceContent(): Boolean {
+        val s = _state.value
+        return s.voicePanelOpen && (
+            s.draftText.isNotBlank() || s.aiDrafts.isNotEmpty() || s.aiBusy ||
+                s.speechState != SpeechUiState.Idle
+            )
+    }
+
+    fun onRequestCloseVoicePanel() {
+        val current = _state.value
+        if (!current.voicePanelOpen) return
+        if (current.draftText.isBlank() && current.aiDrafts.isEmpty() && !current.aiBusy) {
+            onDiscardVoiceDraft()
+            return
+        }
+        if (_state.value.speechState == SpeechUiState.Recording ||
+            _state.value.speechState == SpeechUiState.Connecting
+        ) {
+            onStopSpeech()
+        }
+        _state.update { it.copy(voiceDiscardConfirmVisible = true) }
+    }
+
+    fun onContinueVoiceEditing() {
+        cancelSpeechResources()
+        _state.update {
+            it.copy(
+                speechState = SpeechUiState.Idle,
+                speechPartialText = "",
+                voiceDiscardConfirmVisible = false,
+                message = "已保留本次内容，请手动保存",
+            )
+        }
+    }
+
+    fun onDiscardVoiceDraft() {
+        invalidateAiRequest()
+        cancelSpeechResources()
+        _state.update {
+            it.copy(
+                addOpen = false,
+                addTargetListId = null,
+                draftText = "",
+                draftNote = "",
+                draftHasTime = false,
+                draftTime = null,
+                aiDrafts = emptyList(),
+                selectedAiDraftId = null,
+                aiError = null,
+                inputError = null,
+                message = null,
+                speechState = SpeechUiState.Idle,
+                speechPartialText = "",
+                speechConsentVisible = false,
+                voicePanelOpen = false,
+                voiceElapsedMs = 0,
+                voiceWaveform = emptyList(),
+                voiceHasSpoken = false,
+                voiceTextEditing = false,
+                voiceLimitReached = false,
+                voiceDiscardConfirmVisible = false,
+            )
+        }
     }
 
     /** 403 时由用户手动切换资源；不自动重试，也不把失败当成功。 */
@@ -676,6 +932,10 @@ class TodoViewModel @JvmOverloads constructor(
     }
 
     private fun cancelSpeechResources() {
+        voiceTimerJob?.cancel()
+        voiceTimerJob = null
+        voiceStartedAt = null
+        voiceLastSpeechAt = null
         speechGeneration++
         speechJob?.cancel()
         speechJob = null
@@ -684,6 +944,19 @@ class TodoViewModel @JvmOverloads constructor(
         speechRecorder?.cancel()
         speechRecorder?.release()
         speechRecorder = null
+    }
+
+    /** 长按麦克风直接打开完整手动表单；当前清单与已输入文字一并带入。 */
+    fun onOpenFullManualForm() {
+        val s = _state.value
+        if (s.busy) return
+        val target = (s.selectedView as? TodoView.CustomList)?.listId
+        _state.value = s.copy(
+            detail = DetailDraft.forCreation(s.draftText, target, s.draftNote),
+            inputError = null,
+            message = null,
+            voiceTextEditing = false,
+        )
     }
 
     /** 把当前识别文字带入已有事项详情，由用户补全字段后创建。 */
@@ -697,6 +970,7 @@ class TodoViewModel @JvmOverloads constructor(
             detail = DetailDraft.forCreation(s.draftText, s.addTargetListId, s.draftNote),
             inputError = null,
             message = null,
+            voiceTextEditing = false,
         )
     }
 
@@ -739,6 +1013,13 @@ class TodoViewModel @JvmOverloads constructor(
                 inputError = null,
                 speechState = SpeechUiState.Idle,
                 speechPartialText = "",
+                voicePanelOpen = false,
+                voiceElapsedMs = 0,
+                voiceWaveform = emptyList(),
+                voiceHasSpoken = false,
+                voiceTextEditing = false,
+                voiceLimitReached = false,
+                voiceDiscardConfirmVisible = false,
                 message = outcomeMessage(result.outcome),
             )
             reload()
@@ -1180,6 +1461,13 @@ class TodoViewModel @JvmOverloads constructor(
                     results.any { it.outcome == ReminderOutcome.Scheduled } -> "已安排明确设置的提醒"
                     else -> "未设置提醒"
                 },
+                voicePanelOpen = false,
+                voiceElapsedMs = 0,
+                voiceWaveform = emptyList(),
+                voiceHasSpoken = false,
+                voiceTextEditing = false,
+                voiceLimitReached = false,
+                voiceDiscardConfirmVisible = false,
             )
             reload()
         }
@@ -1507,4 +1795,26 @@ class TodoViewModel @JvmOverloads constructor(
         cancelSpeechResources()
         super.onCleared()
     }
+
+    private companion object {
+        const val VOICE_TICK_MS = 100L
+        const val SILENCE_AFTER_SPEECH_MS = 2_000L
+        const val NO_SPEECH_TIMEOUT_MS = 10_000L
+        const val MAX_RECORDING_MS = 60_000L
+        const val WAVEFORM_BARS = 36
+        const val SPEECH_LEVEL = 0.035f
+    }
+}
+
+internal fun pcmLevel(pcm: ByteArray): Float {
+    val samples = pcm.size / 2
+    if (samples == 0) return 0f
+    var sum = 0.0
+    for (index in 0 until samples) {
+        val low = pcm[index * 2].toInt() and 0xff
+        val high = pcm[index * 2 + 1].toInt()
+        val sample = (high shl 8) or low
+        sum += sample.toDouble() * sample
+    }
+    return (kotlin.math.sqrt(sum / samples) / 32768.0).toFloat()
 }

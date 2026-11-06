@@ -3,12 +3,18 @@ package com.voicetodo.ui
 import android.app.Application
 import android.os.Looper
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
@@ -212,8 +218,8 @@ class SpeechCaptureFlowTest {
         stream.emit(SpeechEvent.Partial("实时字幕"))
         compose.waitForIdle()
 
-        compose.onNodeWithTag("speech_partial_text").assertTextContains("实时字幕")
-        compose.onNodeWithTag("speech_stop_button")
+        compose.onNodeWithTag("voice_partial_text").assertTextContains("实时字幕")
+        compose.onNodeWithTag("voice_stop_button")
             .assertIsDisplayed()
             .assertIsEnabled()
             .performClick()
@@ -273,6 +279,157 @@ class SpeechCaptureFlowTest {
         assertEquals("明天下午开会", vm.state.value.draftText)
         assertEquals("下午，三楼会议室", vm.state.value.aiDraft!!.note)
         assertTrue("自动整理后仍需手动保存", vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `two seconds of silence after speech ends recording automatically`() {
+        settingsStore.settings = configured()
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("明天开会"))
+        idle()
+
+        clock.instant = clock.instant.plusMillis(2_100)
+        waitFor { stream.finished }
+
+        assertTrue(recorder.stopped)
+        assertTrue(vm.state.value.message!!.contains("连续 2 秒"))
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `ten seconds without speech stops without creating an item`() {
+        settingsStore.settings = configured()
+        vm.onOpenAdd(startVoice = true)
+        idle()
+
+        clock.instant = clock.instant.plusMillis(10_100)
+        waitFor { vm.state.value.message?.contains("10 秒") == true }
+
+        assertFalse(vm.state.value.voiceHasSpoken)
+        assertTrue(vm.state.value.voicePanelOpen)
+        assertTrue(recorder.stopped)
+        assertTrue(stream.cancelled)
+        assertFalse(stream.finished)
+        assertTrue(vm.state.value.message!!.contains("10 秒"))
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `sixty second limit stops recording and keeps a manual review warning`() {
+        settingsStore.settings = configured()
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("正在说一件很长的事"))
+        idle()
+
+        clock.instant = clock.instant.plusMillis(60_100)
+        waitFor { stream.finished }
+
+        assertTrue(vm.state.value.voiceLimitReached)
+        assertTrue(vm.state.value.message!!.contains("60 秒录音上限"))
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `pen stops recording and protects edited text from the final transcript`() {
+        settingsStore.settings = configured()
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.runOnIdle { vm.onOpenAdd(startVoice = true) }
+        compose.waitForIdle()
+        stream.emit(SpeechEvent.Partial("识别错的字"))
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("voice_edit_pen").performClick()
+        compose.onNodeWithTag("voice_edit_text").performTextReplacement("我自己改的字")
+        compose.waitForIdle()
+        assertTrue(recorder.stopped)
+        assertTrue(stream.finished)
+
+        stream.emit(SpeechEvent.Final("服务返回的另一句话"))
+        compose.waitForIdle()
+        assertEquals("我自己改的字", vm.state.value.draftText)
+        assertTrue(vm.state.value.voiceTextEditing)
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `close confirmation can continue editing or discard the whole voice draft`() {
+        settingsStore.settings = configured()
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        stream.emit(SpeechEvent.Partial("尚未保存的内容"))
+        idle()
+
+        vm.onRequestCloseVoicePanel()
+        idle()
+        assertTrue(vm.state.value.voiceDiscardConfirmVisible)
+
+        vm.onContinueVoiceEditing()
+        idle()
+        assertTrue(vm.state.value.voicePanelOpen)
+        assertEquals("尚未保存的内容", vm.state.value.draftText)
+        assertEquals(SpeechUiState.Idle, vm.state.value.speechState)
+        assertTrue(stream.cancelled)
+        assertFalse(vm.state.value.voiceDiscardConfirmVisible)
+
+        vm.onRequestCloseVoicePanel()
+        idle()
+        vm.onDiscardVoiceDraft()
+        idle()
+        assertFalse(vm.state.value.addOpen)
+        assertFalse(vm.state.value.voicePanelOpen)
+        assertTrue(vm.state.value.draftText.isEmpty())
+    }
+
+    @Test
+    fun `bottom microphone appears only on todo and short press opens the voice panel`() {
+        settingsStore.settings = configured()
+        compose.setContent {
+            MaterialTheme {
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { Text("四象限页") },
+                    pomodoroContent = { Text("番茄页") },
+                    settingsContent = { Text("我的页") },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("voice_mic_button").assertExists()
+        compose.onNodeWithTag("voice_add_button").assertDoesNotExist()
+        compose.onNodeWithTag("text_add_button").assertDoesNotExist()
+        compose.onNodeWithTag("voice_mic_button").performTouchInput { click() }
+        waitFor { vm.state.value.addOpen && vm.state.value.voicePanelOpen }
+        compose.onNodeWithTag("voice_panel").assertExists()
+        compose.onNodeWithTag("voice_edit_pen").assertExists()
+        compose.onNodeWithTag("voice_waveform").assertExists()
+        compose.onNodeWithTag("voice_duration").assertExists()
+
+        compose.onNodeWithTag("voice_close_button").performClick()
+        waitFor { !vm.state.value.voicePanelOpen }
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        compose.onNodeWithTag("voice_mic_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun `long press microphone opens the full manual form`() {
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+
+        compose.onNodeWithTag("voice_mic_button").performTouchInput { longClick() }
+        waitFor { vm.state.value.detail != null }
+
+        assertFalse(vm.state.value.voicePanelOpen)
+        assertFalse(vm.state.value.addOpen)
+        compose.onNodeWithTag("detail_title_field").assertExists()
+        compose.onNodeWithTag("detail_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("detail_list_selector"),
+        )
+        compose.onNodeWithTag("detail_list_selector").assertExists()
+        compose.onNodeWithTag("detail_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("repeat_none"),
+        )
+        compose.onNodeWithTag("repeat_none").assertExists()
     }
 
     private fun configured() = DoubaoSpeechSettings(

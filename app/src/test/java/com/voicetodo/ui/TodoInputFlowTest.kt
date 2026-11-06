@@ -93,10 +93,10 @@ class TodoInputFlowTest {
         compose.runOnIdle { vm.onCloseAdd() }
         waitFor { !vm.state.value.addOpen }
 
-        compose.onNodeWithTag("voice_add_button").performClick()
+        compose.onNodeWithTag("voice_mic_button").performClick()
         waitFor { vm.state.value.addOpen }
 
-        compose.onNodeWithTag("voice_unavailable_notice")
+        compose.onNodeWithTag("voice_input_error")
             .assertTextContains("语音识别未配置", substring = true)
         assertTrue(
             vm.state.value.inputError.orEmpty().contains("语音识别未配置"),

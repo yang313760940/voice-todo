@@ -58,6 +58,9 @@ class MainActivity : ComponentActivity() {
                             onOpenReminderSettings = ::openReminderSettings,
                         )
                     },
+                    todoHasUnsavedContent = todoViewModel::hasUnsavedVoiceContent,
+                    onContinueTodoEditing = todoViewModel::onContinueVoiceEditing,
+                    onDiscardTodoDraft = todoViewModel::onDiscardVoiceDraft,
                 )
             }
         }

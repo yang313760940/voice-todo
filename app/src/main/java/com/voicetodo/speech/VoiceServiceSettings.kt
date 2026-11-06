@@ -89,10 +89,53 @@ data class AliyunVoiceCredentials(
         }.getOrNull()
     }
 
+    fun speechSettings(uploadAcknowledged: Boolean = false): AliyunSpeechSettings =
+        AliyunSpeechSettings(
+            apiKey = apiKey,
+            model = speechModel,
+            uploadAcknowledged = uploadAcknowledged,
+        )
+
     companion object {
         const val DEFAULT_TEXT_MODEL = "qwen-plus"
         const val DEFAULT_SPEECH_MODEL = "qwen3-asr-flash-realtime"
         const val DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    }
+}
+
+/**
+ * 阿里云百炼实时识别配置。
+ *
+ * [apiKey] 与文本整理共用同一把百炼 Key；[toString] 永远不返回密钥。
+ */
+data class AliyunSpeechSettings(
+    val apiKey: String,
+    val model: String = AliyunVoiceCredentials.DEFAULT_SPEECH_MODEL,
+    val endpoint: String = DEFAULT_ENDPOINT,
+    val uploadAcknowledged: Boolean = false,
+) {
+    fun normalized(): AliyunSpeechSettings = copy(
+        apiKey = apiKey.trim(),
+        model = model.trim(),
+        endpoint = endpoint.trim(),
+    )
+
+    fun validate(): AliyunSpeechSettings {
+        val clean = normalized()
+        require(clean.apiKey.isNotEmpty()) { "请填写阿里云百炼 API Key" }
+        require(clean.model.isNotEmpty()) { "请填写百炼实时识别模型" }
+        require(clean.endpoint.startsWith("wss://") || clean.endpoint.startsWith("ws://")) {
+            "百炼实时识别地址必须使用 wss://（本机调试可用 ws://）"
+        }
+        return clean
+    }
+
+    override fun toString(): String =
+        "AliyunSpeechSettings(apiKey=***, model=$model, endpoint=$endpoint, " +
+            "uploadAcknowledged=$uploadAcknowledged)"
+
+    companion object {
+        const val DEFAULT_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     }
 }
 
@@ -135,6 +178,7 @@ data class VoiceServiceSettings(
             VoiceProvider.Aliyun -> {
                 require(clean.aliyun.apiKey.isNotEmpty()) { "请填写阿里云百炼 API Key" }
                 require(clean.aliyun.textModel.isNotEmpty()) { "请填写百炼文本模型" }
+                require(clean.aliyun.speechModel.isNotEmpty()) { "请填写百炼实时识别模型" }
                 require(clean.aliyun.organizerSettings() != null) {
                     "百炼文本服务地址无效；请使用 https 地址（本机调试可用 127.0.0.1）"
                 }
@@ -146,7 +190,8 @@ data class VoiceServiceSettings(
     fun speechConfigured(): Boolean = when (provider) {
         VoiceProvider.Doubao -> doubao.speechApiKey.isNotBlank() &&
             doubao.resourceId.isNotBlank()
-        VoiceProvider.Aliyun -> aliyun.apiKey.isNotBlank()
+        VoiceProvider.Aliyun -> aliyun.apiKey.isNotBlank() &&
+            aliyun.speechModel.isNotBlank()
     }
 
     fun organizerSettings(): AiSettings? = when (provider) {
@@ -165,6 +210,11 @@ data class VoiceServiceSettings(
     fun doubaoSpeechSettings(): DoubaoSpeechSettings? {
         if (provider != VoiceProvider.Doubao || !speechConfigured()) return null
         return doubao.speechSettings(uploadAcknowledged = hasUploadConsent())
+    }
+
+    fun aliyunSpeechSettings(): AliyunSpeechSettings? {
+        if (provider != VoiceProvider.Aliyun || !speechConfigured()) return null
+        return aliyun.speechSettings(uploadAcknowledged = hasUploadConsent())
     }
 
     fun withDoubaoResource(resourceId: String): VoiceServiceSettings {

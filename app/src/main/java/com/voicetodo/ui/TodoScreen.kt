@@ -52,6 +52,7 @@ import com.voicetodo.domain.isOverdue
 import com.voicetodo.domain.buildDisplayGroups
 import com.voicetodo.domain.itemsForView
 import com.voicetodo.domain.supportsUnscheduledFilter
+import com.voicetodo.speech.VoiceProvider
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -1100,7 +1101,9 @@ private fun SpeechCaptureCard(vm: TodoViewModel, state: UiState, enabled: Boolea
                         enabled = enabled,
                         modifier = Modifier.testTag("speech_retry_button"),
                     ) { Text("重新录音") }
-                    if (state.inputError?.contains("403") == true) {
+                    if (state.voiceProvider == VoiceProvider.Doubao &&
+                        state.inputError?.contains("403") == true
+                    ) {
                         TextButton(
                             onClick = vm::onSwitchToLegacySpeechResource,
                             enabled = enabled,

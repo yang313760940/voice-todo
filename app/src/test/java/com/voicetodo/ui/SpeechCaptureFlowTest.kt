@@ -33,6 +33,8 @@ import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
 import com.voicetodo.speech.DoubaoSpeechSettings
 import com.voicetodo.speech.DoubaoVoiceCredentials
+import com.voicetodo.speech.AliyunVoiceCredentials
+import com.voicetodo.speech.FakeAliyunSpeechStreamFactory
 import com.voicetodo.speech.FakeSpeechRecorder
 import com.voicetodo.speech.FakeSpeechRecorderFactory
 import com.voicetodo.speech.FakeSpeechStream
@@ -75,6 +77,8 @@ class SpeechCaptureFlowTest {
     private val aiClient = FakeAiAssistClient()
     private val stream = FakeSpeechStream()
     private val streamFactory = FakeSpeechStreamFactory(stream)
+    private val aliyunStream = FakeSpeechStream()
+    private val aliyunStreamFactory = FakeAliyunSpeechStreamFactory(aliyunStream)
     private val recorder = FakeSpeechRecorder()
     private val recorderFactory = FakeSpeechRecorderFactory(recorder)
     private val scheduler = RecordedScheduler()
@@ -98,6 +102,7 @@ class SpeechCaptureFlowTest {
                     zoneId = ZoneId.of("Asia/Shanghai"),
                     speechSettingsStore = settingsStore,
                     speechStreamFactory = streamFactory,
+                    aliyunSpeechStreamFactory = aliyunStreamFactory,
                     speechRecorderFactory = recorderFactory,
                     aiSettingsStore = aiSettingsStore,
                     aiClient = aiClient,
@@ -139,6 +144,32 @@ class SpeechCaptureFlowTest {
         assertEquals("明天下午三点开会", vm.state.value.draftText)
         assertEquals(SpeechUiState.Idle, vm.state.value.speechState)
         assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `aliyun provider uses its own streaming adapter and the same key for organizing`() {
+        settingsStore.settings = configuredAliyun()
+        aiClient.result = AiDraft(sourceText = "明天开会", title = "开会")
+
+        vm.onOpenAdd(startVoice = true)
+        idle()
+        assertTrue(recorder.started)
+        assertEquals(1, aliyunStreamFactory.openCalls)
+        assertEquals(0, streamFactory.openCalls)
+        assertEquals("test-aliyun-key", aliyunStreamFactory.openedWith!!.apiKey)
+
+        aliyunStream.emit(SpeechEvent.Partial("明天开会"))
+        idle()
+        assertEquals("明天开会", vm.state.value.draftText)
+
+        vm.onStopSpeech()
+        idle()
+        assertTrue(aliyunStream.finished)
+        aliyunStream.emit(SpeechEvent.Final("明天开会"))
+        idle()
+        waitFor { vm.state.value.aiDrafts.isNotEmpty() }
+        assertEquals(1, aiClient.calls)
+        assertEquals("test-aliyun-key", aiClient.receivedSettings.single().apiKey)
     }
 
     @Test
@@ -767,6 +798,20 @@ class SpeechCaptureFlowTest {
             0
         },
         acknowledgedProviders = if (acknowledged) setOf(VoiceProvider.Doubao) else emptySet(),
+    )
+
+    private fun configuredAliyun(acknowledged: Boolean = true) = VoiceServiceSettings(
+        provider = VoiceProvider.Aliyun,
+        aliyun = AliyunVoiceCredentials(
+            apiKey = "test" + "-aliyun-key",
+            textModel = "qwen-plus",
+        ),
+        uploadConsentVersion = if (acknowledged) {
+            VoiceServiceSettings.UPLOAD_CONSENT_VERSION
+        } else {
+            0
+        },
+        acknowledgedProviders = if (acknowledged) setOf(VoiceProvider.Aliyun) else emptySet(),
     )
 
     private fun idle() {

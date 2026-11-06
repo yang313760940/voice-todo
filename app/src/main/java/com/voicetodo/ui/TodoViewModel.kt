@@ -38,11 +38,13 @@ import com.voicetodo.domain.MissedReminder
 import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.StorageState
 import com.voicetodo.speech.AliyunVoiceCredentials
+import com.voicetodo.speech.AliyunSpeechStreamFactory
 import com.voicetodo.speech.DefaultSpeechRecorderFactory
 import com.voicetodo.speech.DoubaoVoiceCredentials
 import com.voicetodo.speech.DoubaoSpeechSettings
 import com.voicetodo.speech.EncryptedSpeechSettingsStore
 import com.voicetodo.speech.OkHttpSpeechStreamFactory
+import com.voicetodo.speech.OkHttpAliyunSpeechStreamFactory
 import com.voicetodo.speech.SpeechEvent
 import com.voicetodo.speech.SpeechRecorder
 import com.voicetodo.speech.SpeechRecorderFactory
@@ -286,6 +288,8 @@ class TodoViewModel @JvmOverloads constructor(
     },
     private val speechSettingsStore: SpeechSettingsStore = EncryptedSpeechSettingsStore(app),
     private val speechStreamFactory: SpeechStreamFactory = OkHttpSpeechStreamFactory(),
+    private val aliyunSpeechStreamFactory: AliyunSpeechStreamFactory =
+        OkHttpAliyunSpeechStreamFactory(),
     private val speechRecorderFactory: SpeechRecorderFactory = DefaultSpeechRecorderFactory,
     private val hasRecordAudioPermission: () -> Boolean = {
         ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
@@ -566,15 +570,6 @@ class TodoViewModel @JvmOverloads constructor(
             )
             return
         }
-        if (settings.provider != VoiceProvider.Doubao) {
-            _state.value = current.copy(
-                speechConfigured = true,
-                voiceProvider = settings.provider,
-                voiceLanguage = settings.language,
-                inputError = "阿里云语音识别尚未接入；请先改用豆包，或点小笔直接输入",
-            )
-            return
-        }
         _state.value = current.copy(
             speechConfigured = true,
             voiceProvider = settings.provider,
@@ -633,15 +628,22 @@ class TodoViewModel @JvmOverloads constructor(
             )
             return
         }
-        val doubao = settings.doubaoSpeechSettings()
-        if (doubao == null) {
+        val stream = when (settings.provider) {
+            VoiceProvider.Doubao ->
+                settings.doubaoSpeechSettings()?.let(speechStreamFactory::open)
+            VoiceProvider.Aliyun ->
+                settings.aliyunSpeechSettings()?.let(aliyunSpeechStreamFactory::open)
+        }
+        if (stream == null) {
             _state.value = _state.value.copy(
                 speechState = SpeechUiState.Failed,
-                inputError = "豆包语音凭据不完整；请到设置检查 API Key 与资源 ID",
+                inputError = when (settings.provider) {
+                    VoiceProvider.Doubao -> "豆包语音凭据不完整；请到设置检查 API Key 与资源 ID"
+                    VoiceProvider.Aliyun -> "阿里云百炼凭据不完整；请到设置检查 API Key"
+                },
             )
             return
         }
-        val stream = speechStreamFactory.open(doubao)
         val recorder = speechRecorderFactory.create()
         cancelSpeechResources()
         cancelAutoSave()

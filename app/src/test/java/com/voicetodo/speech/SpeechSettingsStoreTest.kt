@@ -122,6 +122,27 @@ class SpeechSettingsStoreTest {
         assertTrue(error!!.message!!.contains("识别语言"))
     }
 
+    @Test
+    fun `aliyun one key covers realtime speech and text organizing`() {
+        val aliyun = VoiceServiceSettings(
+            provider = VoiceProvider.Aliyun,
+            aliyun = AliyunVoiceCredentials(
+                apiKey = "test" + "-aliyun-key",
+                textModel = "qwen-plus",
+            ),
+            acknowledgedProviders = setOf(VoiceProvider.Aliyun),
+        ).validate()
+
+        val speech = aliyun.aliyunSpeechSettings()!!
+        val organizer = aliyun.organizerSettings()!!
+        assertEquals("test-aliyun-key", speech.apiKey)
+        assertEquals(AliyunVoiceCredentials.DEFAULT_SPEECH_MODEL, speech.model)
+        assertEquals(AliyunSpeechSettings.DEFAULT_ENDPOINT, speech.endpoint)
+        assertEquals("test-aliyun-key", organizer.apiKey)
+        assertEquals(AliyunVoiceCredentials.DASHSCOPE_BASE_URL, organizer.baseUrl)
+        assertNull(aliyun.doubaoSpeechSettings())
+    }
+
     private class ReversibleCipher : AiSecretCipher {
         override fun encrypt(plain: ByteArray): ByteArray =
             plain.map { (it.toInt() xor 0x5A).toByte() }.toByteArray()

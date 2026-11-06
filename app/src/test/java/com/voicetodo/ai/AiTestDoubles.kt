@@ -21,6 +21,7 @@ class FakeAiAssistClient(
     var gate: CompletableDeferred<Unit>? = null
     val receivedTexts = mutableListOf<String>()
     val receivedContexts = mutableListOf<AiPromptContext>()
+    val receivedSettings = mutableListOf<AiSettings>()
 
     override suspend fun organize(
         text: String,
@@ -36,6 +37,7 @@ class FakeAiAssistClient(
         calls++
         receivedTexts += text
         receivedContexts += context
+        receivedSettings += settings
         gate?.await()
         failure?.let { throw it }
         return results ?: listOf(requireNotNull(result) { "测试未提供 AI 结果" })

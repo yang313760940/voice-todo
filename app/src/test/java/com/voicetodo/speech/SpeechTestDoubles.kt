@@ -62,6 +62,19 @@ class FakeSpeechStreamFactory(
     }
 }
 
+class FakeAliyunSpeechStreamFactory(
+    val stream: FakeSpeechStream = FakeSpeechStream(),
+) : AliyunSpeechStreamFactory {
+    var openedWith: AliyunSpeechSettings? = null
+    var openCalls = 0
+
+    override fun open(settings: AliyunSpeechSettings): SpeechStream {
+        openCalls++
+        openedWith = settings
+        return stream
+    }
+}
+
 class FakeSpeechRecorder : SpeechRecorder {
     override val sampleRate = 16000
 

@@ -11,6 +11,9 @@ local.properties
 hs_err_pid*.log
 replay_pid*.log
 
+# 本机服务凭据（真实 Key 只放这里，禁止提交）
+.secrets/
+
 # 大型二进制（可复现获取，见 docs/offline-toolchain.md）
 # - 离线模型（78 MB）：assets/sherpa/model.int8.onnx
 # - 官方 sherpa-onnx AAR（47 MB）：app/libs/sherpa-onnx-1.13.8.aar

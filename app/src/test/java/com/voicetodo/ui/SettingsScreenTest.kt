@@ -46,6 +46,7 @@ class SettingsScreenTest {
                         canRecordAudio = true,
                     ),
                     aiConfigured = true,
+                    speechConfigured = true,
                     busy = false,
                     message = null,
                     onThemeChange = { preferences = preferences.copy(theme = it) },

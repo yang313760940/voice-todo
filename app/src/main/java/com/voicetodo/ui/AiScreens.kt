@@ -37,6 +37,7 @@ import com.voicetodo.ai.AiReminderDraft
 import com.voicetodo.ai.AiReminderKind
 import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecurrenceFrequency
+import com.voicetodo.speech.DoubaoSpeechSettings
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -51,10 +52,11 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("高级设置 · 在线 AI", style = MaterialTheme.typography.headlineSmall)
+            Text("高级设置 · 在线语音与 AI", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "语音识别始终在本机离线完成。只有你主动点“用在线 AI 整理”时，" +
-                    "应用才会把当前文字、当前日期时间和时区发送到你填写的服务。",
+                "语音识别使用豆包在线完成：只有你主动录音时，16kHz 单声道音频分片和识别文字" +
+                    "才会实时发送到豆包语音服务。只有你主动点“用在线 AI 整理”时，应用才会把" +
+                    "当前文字、当前日期时间和时区发送到你填写的 AI 服务。",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -123,7 +125,7 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
         item {
             Button(onClick = vm::onSaveAiSettings, enabled = enabled,
                 modifier = Modifier.fillMaxWidth().testTag("ai_settings_save")) {
-                Text("保存配置")
+                Text("保存 AI 配置")
             }
             if (state.aiConfigured) {
                 OutlinedButton(onClick = vm::onClearAiSettings, enabled = enabled,
@@ -131,6 +133,101 @@ fun AiSettingsScreen(vm: TodoViewModel, state: UiState, form: AiSettingsForm) {
                     Text("清除 AI 配置")
                 }
             }
+        }
+        item {
+            Card(Modifier.fillMaxWidth().testTag("speech_settings_card")) {
+                Column(Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("豆包在线语音识别", fontWeight = FontWeight.Medium)
+                    Text(
+                        "新版火山引擎控制台使用 X-Api-Key。密钥使用 Android Keystore 加密保存，" +
+                            "不写入日志、备份或源码。音频分片只保存在内存中，不落盘。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "首次录音前会再次提示“录音和文字将上传到豆包”。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = form.speechApiKey,
+                onValueChange = { vm.onSpeechSettingsChange(SpeechSettingsField.ApiKey, it) },
+                label = { Text("豆包语音 API Key") },
+                singleLine = true,
+                enabled = enabled,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth().testTag("speech_api_key_field"),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = form.speechResourceId,
+                onValueChange = {
+                    vm.onSpeechSettingsChange(SpeechSettingsField.ResourceId, it)
+                },
+                label = { Text("资源 ID") },
+                placeholder = { Text("volc.seedasr.sauc.duration") },
+                singleLine = true,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("speech_resource_id_field"),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = form.speechResourceId == DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+                    onClick = {
+                        vm.onSpeechSettingsChange(
+                            SpeechSettingsField.ResourceId,
+                            DoubaoSpeechSettings.DEFAULT_RESOURCE_ID,
+                        )
+                    },
+                    label = { Text("2.0 小时版") },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("speech_resource_default"),
+                )
+                FilterChip(
+                    selected = form.speechResourceId == DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
+                    onClick = {
+                        vm.onSpeechSettingsChange(
+                            SpeechSettingsField.ResourceId,
+                            DoubaoSpeechSettings.LEGACY_RESOURCE_ID,
+                        )
+                    },
+                    label = { Text("1.0 小时版") },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("speech_resource_legacy"),
+                )
+            }
+            Text(
+                "若 2.0 小时版返回 403 未开通，请切换到 1.0 小时版后重试；应用不会把失败当成功。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        item {
+            form.speechError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("speech_settings_error"))
+            }
+            Text(
+                if (state.speechConfigured) "豆包语音：已配置" else "豆包语音：未配置",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("speech_settings_status"),
+            )
+            Button(onClick = vm::onSaveSpeechSettings, enabled = enabled,
+                modifier = Modifier.fillMaxWidth().testTag("speech_settings_save")) {
+                Text("保存语音配置")
+            }
+            if (state.speechConfigured) {
+                OutlinedButton(onClick = vm::onClearSpeechSettings, enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().testTag("speech_settings_clear")) {
+                    Text("清除语音配置")
+                }
+            }
+        }
+        item {
             TextButton(onClick = vm::onCloseAiSettings, enabled = enabled,
                 modifier = Modifier.testTag("ai_settings_cancel")) {
                 Text("返回")

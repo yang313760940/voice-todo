@@ -216,6 +216,8 @@ class AiDraftFlowTest {
         compose.onNodeWithTag("ai_settings_screen").assertIsDisplayed()
         assertEquals(0, aiClient.calls)
 
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("ai_settings_cancel"))
         compose.onNodeWithTag("ai_settings_cancel").performClick()
         waitFor { vm.state.value.aiSettingsForm == null }
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("manual_create_button"))
@@ -457,6 +459,8 @@ class AiDraftFlowTest {
         compose.onNodeWithTag("ai_base_url_field").performTextInput(settings.baseUrl)
         compose.onNodeWithTag("ai_model_field").performTextInput(settings.model)
         compose.onNodeWithTag("ai_api_key_field").performTextInput(key)
+        compose.onNodeWithTag("ai_settings_screen")
+            .performScrollToNode(hasTestTag("ai_settings_save"))
         compose.onNodeWithTag("ai_settings_save").performClick()
         waitFor { vm.state.value.aiSettingsForm == null && vm.state.value.aiConfigured }
 

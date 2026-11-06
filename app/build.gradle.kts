@@ -85,6 +85,8 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
+    // 在线语音识别 WebSocket（豆包）；只在用户主动录音时建立连接。
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // 单元测试
     testImplementation("junit:junit:4.13.2")
@@ -92,6 +94,7 @@ dependencies {
     testImplementation("androidx.test:core:1.5.0")
     testImplementation("androidx.test.ext:junit:1.1.5")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation(composeBom)
     testImplementation("androidx.compose.ui:ui-test-junit4")
 

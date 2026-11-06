@@ -141,6 +141,7 @@ fun SettingsScreen(
             focusSettings = settingsState.focusSettings,
             capabilities = settingsState.capabilities,
             aiConfigured = todoState.aiConfigured,
+            speechConfigured = todoState.speechConfigured,
             busy = settingsState.busy,
             message = settingsState.message,
             onThemeChange = settingsVm::setTheme,
@@ -189,6 +190,7 @@ internal fun MySettingsContent(
     focusSettings: FocusSettings,
     capabilities: ReminderCapabilities?,
     aiConfigured: Boolean,
+    speechConfigured: Boolean,
     busy: Boolean,
     message: String?,
     onThemeChange: (ThemePreference) -> Unit,
@@ -294,10 +296,19 @@ internal fun MySettingsContent(
         item {
             SettingsSection("语音与 AI", "settings_voice_ai") {
                 Text(
-                    text = if (aiConfigured) {
-                        "AI 服务已配置。语音识别仍在本机离线完成。"
+                    text = if (speechConfigured) {
+                        "语音识别：豆包在线（已配置）。录音和文字会发送到豆包。"
                     } else {
-                        "AI 服务未配置；离线语音与手动创建可正常使用。"
+                        "语音识别：豆包在线（未配置）；可先用文字添加。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("speech_settings_status"),
+                )
+                Text(
+                    text = if (aiConfigured) {
+                        "AI 整理：已配置。"
+                    } else {
+                        "AI 整理：未配置。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.testTag("ai_settings_status"),
@@ -306,7 +317,7 @@ internal fun MySettingsContent(
                     onClick = onOpenVoiceAi,
                     modifier = Modifier.testTag("open_ai_settings"),
                 ) {
-                    Text("高级设置")
+                    Text("语音与 AI 设置")
                 }
             }
         }
@@ -550,7 +561,7 @@ internal fun PermissionsGuidanceScreen(
                     "麦克风",
                     readyText(capabilities?.canRecordAudio),
                     capabilities?.canRecordAudio,
-                    "只影响离线语音输入，不影响手动创建事项。",
+                    "只影响在线语音输入，不影响手动创建事项。",
                     "打开应用设置",
                 ) { onOpenSettings(ReminderSettingsTarget.AppDetails) }
             }
@@ -1009,9 +1020,11 @@ internal fun AboutScreen(
                 ) {
                     Text("隐私说明", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "事项、专注记录、偏好和回收站数据保存在本机。语音识别在本机离线完成；" +
-                            "只有你主动选择在线 AI 整理时，当前文字及必要日期、时间和时区才会发送到" +
-                            "你配置的 AI 服务。录音、历史事项、API 密钥和权限授权不会作为 AI 上下文发送。" +
+                        "事项、专注记录、偏好和回收站数据保存在本机。语音识别使用豆包在线服务：" +
+                            "只有你主动录音时，16kHz 单声道音频分片和识别文字才会实时发送到豆包；" +
+                            "录音不落盘，也不会发送到其他服务。只有你主动选择在线 AI 整理时，" +
+                            "当前文字及必要日期、时间和时区才会发送到你配置的 AI 服务。" +
+                            "历史事项、API 密钥和权限授权不会作为 AI 上下文发送。" +
                             "API 密钥使用 Android Keystore 加密保存，不写入日志或业务备份。",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.testTag("about_privacy"),

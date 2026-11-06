@@ -80,7 +80,7 @@ class TodoInputFlowTest {
 
     @Test fun voiceEntryExplainsServiceIsNotConfiguredAndKeepsTextUsable() {
         compose.onNodeWithTag("voice_unavailable_notice")
-            .assertTextContains("在线服务未配置", substring = true)
+            .assertTextContains("语音识别未配置", substring = true)
         compose.onNodeWithTag("record_permission_status")
             .assertTextContains("麦克风 ✓", substring = true)
         compose.onNodeWithTag("title_field").assertIsEnabled().performTextInput("纯文字事项")
@@ -96,9 +96,10 @@ class TodoInputFlowTest {
         waitFor { vm.state.value.addOpen }
 
         compose.onNodeWithTag("voice_unavailable_notice")
-            .assertTextContains("在线服务未配置", substring = true)
-        compose.onNodeWithTag("input_error")
-            .assertTextContains("在线语音识别尚未配置", substring = true)
+            .assertTextContains("语音识别未配置", substring = true)
+        assertTrue(
+            vm.state.value.inputError.orEmpty().contains("语音识别未配置"),
+        )
         assertTrue(vm.state.value.items.isEmpty())
     }
 

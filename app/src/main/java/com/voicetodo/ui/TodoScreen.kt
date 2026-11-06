@@ -495,11 +495,12 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
     }
     var hourText by remember { mutableStateOf("") }
     var minuteText by remember { mutableStateOf("") }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
-        contentPadding = PaddingValues(vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
+            contentPadding = PaddingValues(vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("添加事项", style = MaterialTheme.typography.headlineSmall,
@@ -526,12 +527,7 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
         }
         item { StorageStatus(state, vm::onRetryStorage) }
         item {
-            Text(
-                "在线服务未配置；请先用文字输入",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("voice_unavailable_notice"),
-            )
+            SpeechCaptureCard(vm, state, baseEnabled)
         }
         item {
             OutlinedTextField(value = state.draftText, onValueChange = vm::onDraftTextChange,
@@ -544,7 +540,7 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("在线 AI 整理（可选）", fontWeight = FontWeight.Medium)
                     Text(
-                        "语音识别将在接入在线服务后启用。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
+                        "语音识别由豆包在线完成。在线 AI 只接收你这次提交的文字、当前日期时间和时区，" +
                             "不发送录音、历史事项或其他待办。",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -616,6 +612,136 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
         item {
             InputError(state.inputError)
             Message(state.message)
+        }
+        }
+        if (state.speechConsentVisible) {
+            AlertDialog(
+                onDismissRequest = vm::onCancelSpeechConsent,
+                title = { Text("录音和文字将上传到豆包") },
+                text = {
+                    Text(
+                        "开始录音后，16kHz 单声道音频分片和识别文字会实时发送到豆包语音服务，" +
+                            "用于转写当前事项。音频不会保存到本机，也不会发送到其他服务。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = vm::onConfirmSpeechConsent,
+                        modifier = Modifier.testTag("speech_consent_confirm"),
+                    ) { Text("同意并开始") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = vm::onCancelSpeechConsent,
+                        modifier = Modifier.testTag("speech_consent_cancel"),
+                    ) { Text("取消") }
+                },
+                modifier = Modifier.testTag("speech_consent_dialog"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpeechCaptureCard(vm: TodoViewModel, state: UiState, enabled: Boolean) {
+    Card(Modifier.fillMaxWidth().testTag("speech_capture_card")) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("语音识别（豆包在线）", fontWeight = FontWeight.Medium)
+            when {
+                !state.speechConfigured -> {
+                    Text(
+                        "语音识别未配置；请先在高级设置中填写豆包语音 API Key。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("voice_unavailable_notice"),
+                    )
+                    TextButton(
+                        onClick = vm::onOpenAiSettings,
+                        enabled = enabled,
+                        modifier = Modifier.testTag("speech_open_settings"),
+                    ) { Text("去配置") }
+                }
+                state.speechState == SpeechUiState.Connecting ||
+                    state.speechState == SpeechUiState.Recording -> {
+                    Text(
+                        if (state.speechState == SpeechUiState.Connecting) {
+                            "正在连接豆包，准备录音…"
+                        } else {
+                            "正在聆听；说完后点“结束录音”。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("speech_recording_status"),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = vm::onStopSpeech,
+                            enabled = enabled,
+                            modifier = Modifier.testTag("speech_stop_button"),
+                        ) { Text("结束录音") }
+                        TextButton(
+                            onClick = vm::onCancelSpeech,
+                            enabled = enabled,
+                            modifier = Modifier.testTag("speech_cancel_button"),
+                        ) { Text("取消录音") }
+                    }
+                    Text(
+                        state.draftText.ifBlank { "等待识别文字…" },
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.testTag("speech_partial_text"),
+                    )
+                }
+                state.speechState == SpeechUiState.Finishing -> {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text(
+                            "正在等待最终识别结果…",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("speech_finishing_status"),
+                        )
+                    }
+                }
+                state.speechState == SpeechUiState.Failed -> {
+                    Text(
+                        state.inputError ?: "语音识别失败，已识别的文字可能不完整",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.testTag("speech_error"),
+                    )
+                    Button(
+                        onClick = vm::onStartSpeech,
+                        enabled = enabled,
+                        modifier = Modifier.testTag("speech_retry_button"),
+                    ) { Text("重新录音") }
+                    if (state.inputError?.contains("403") == true) {
+                        TextButton(
+                            onClick = vm::onSwitchToLegacySpeechResource,
+                            enabled = enabled,
+                            modifier = Modifier.testTag("speech_switch_legacy"),
+                        ) { Text("切换到 1.0 小时版") }
+                    }
+                }
+                else -> {
+                    Text(
+                        if (state.draftText.isBlank()) {
+                            "点击开始录音；识别完成后请手动保存。"
+                        } else {
+                            "识别完成；可继续修改文字后手动保存。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("speech_idle_status"),
+                    )
+                    Button(
+                        onClick = vm::onStartSpeech,
+                        enabled = enabled,
+                        modifier = Modifier.testTag("speech_start_button"),
+                    ) { Text("开始录音") }
+                }
+            }
         }
     }
 }

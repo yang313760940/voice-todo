@@ -109,6 +109,20 @@ fun TodoScreen(vm: TodoViewModel) {
                 if (state.voicePanelOpen) VoiceCapturePanel(vm, state, enabled)
             }
         }
+        state.pendingUndo?.let { pending ->
+            Snackbar(
+                action = {
+                    TextButton(
+                        onClick = vm::onUndoBatch,
+                        modifier = Modifier.testTag("undo_button"),
+                    ) { Text("· 撤销") }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .testTag("undo_bar"),
+            ) { Text("已添加 ${pending.count} 项") }
+        }
         if (state.pendingRecurringDeleteId != null) {
             AlertDialog(
                 onDismissRequest = vm::onCancelRecurringDelete,

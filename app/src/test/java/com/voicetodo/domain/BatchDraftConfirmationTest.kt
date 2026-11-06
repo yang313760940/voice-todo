@@ -176,6 +176,49 @@ class BatchDraftConfirmationTest {
         }
     }
 
+    @Test
+    fun `undo removes the batch and generated occurrences without touching other items or trash`() = runBlocking {
+        val db = database()
+        try {
+            val scheduler = RecordedScheduler()
+            val useCases = TodoUseCases(RoomTodoRepository(db, legacy()), scheduler, FrozenClock(now), zone)
+            val outside = useCases.confirmDraft(
+                "本批之外",
+                remindAt = now.plusSeconds(3_600),
+                itemId = "outside",
+            ).item
+            val rule = RecurrenceRule(
+                frequency = RecurrenceFrequency.Weekly,
+                startDate = LocalDate.of(2026, 11, 5),
+                weekdays = setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY),
+                reminderTimes = listOf(LocalTime.of(18, 30)),
+            )
+            val drafts = listOf(
+                TodoDraftInput("draft-a", TodoEdit("买菜", LocalDate.of(2026, 11, 6), null, null)),
+                TodoDraftInput(
+                    "draft-b",
+                    TodoEdit("锻炼", null, null, null),
+                    recurrence = rule,
+                ),
+            )
+            val results = useCases.confirmDrafts(drafts)
+            assertEquals(5, useCases.listItems().size)
+
+            val removed = useCases.undoBatchCreation(results.map { it.item.id })
+
+            assertEquals("普通草稿与重复模板、两次实例都应移除", 4, removed)
+            assertEquals(listOf(outside.id), useCases.listItems().map { it.id })
+            assertTrue(useCases.listTrash().isEmpty())
+            assertTrue(scheduler.cancelled.containsAll(results.map { it.item.id }))
+            assertTrue(scheduler.cancelled.none { it == outside.id })
+
+            useCases.confirmDrafts(drafts)
+            assertEquals("撤销后可以重新手动保存", 5, useCases.listItems().size)
+        } finally {
+            db.close()
+        }
+    }
+
     private fun database(): TodoDatabase {
         val app = ApplicationProvider.getApplicationContext<Application>()
         return Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()

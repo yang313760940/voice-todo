@@ -226,6 +226,8 @@ data class UiState(
     /** 自动保存倒计时截止点；null 表示当前没有待执行的自动保存。 */
     val autoSaveDeadline: Instant? = null,
     val autoSaveRemainingMs: Long = 0,
+    /** 最近一次批量保存的撤销窗口；null 表示不可撤销。 */
+    val pendingUndo: PendingBatchUndo? = null,
     val seriesLabels: Map<String, String> = emptyMap(),
     val missedReminders: List<MissedReminder> = emptyList(),
     /** 删除重复实例前等待用户选择作用范围。 */
@@ -235,6 +237,15 @@ data class UiState(
 ) {
     val aiDraft: AiDraft?
         get() = aiDrafts.firstOrNull { it.itemId == selectedAiDraftId } ?: aiDrafts.firstOrNull()
+}
+
+/** 刚保存的一批事项及其原始草稿，供五秒内整批撤回。 */
+data class PendingBatchUndo(
+    val itemIds: List<String>,
+    val drafts: List<AiDraft>,
+    val deadline: Instant,
+) {
+    val count: Int get() = drafts.size
 }
 
 /**
@@ -274,6 +285,7 @@ class TodoViewModel @JvmOverloads constructor(
     private var voiceStartedAt: Instant? = null
     @Volatile private var voiceLastSpeechAt: Instant? = null
     private var autoSaveJob: Job? = null
+    private var undoJob: Job? = null
     private var autoSaveSuppressed = false
 
     private val _state = MutableStateFlow(UiState())
@@ -322,6 +334,8 @@ class TodoViewModel @JvmOverloads constructor(
     /** 备份恢复替换了整库数据后，丢弃旧编辑上下文并重新读取所有页面状态。 */
     fun refreshAfterExternalDataChange() {
         cancelAutoSave()
+        undoJob?.cancel()
+        undoJob = null
         _state.value = _state.value.copy(
             detail = null,
             addOpen = false,
@@ -341,6 +355,7 @@ class TodoViewModel @JvmOverloads constructor(
             voiceDiscardConfirmVisible = false,
             autoSaveDeadline = null,
             autoSaveRemainingMs = 0,
+            pendingUndo = null,
             pendingRecurringDeleteId = null,
             message = null,
         )
@@ -1297,6 +1312,68 @@ class TodoViewModel @JvmOverloads constructor(
         }
     }
 
+    internal fun onUndoTick() {
+        val pending = _state.value.pendingUndo ?: return
+        if (clock.now().isBefore(pending.deadline)) return
+        _state.update {
+            if (it.pendingUndo?.deadline == pending.deadline) it.copy(pendingUndo = null) else it
+        }
+    }
+
+    private fun startUndoWindow(itemIds: List<String>, drafts: List<AiDraft>) {
+        if (itemIds.isEmpty() || drafts.isEmpty()) return
+        undoJob?.cancel()
+        val deadline = clock.now().plusMillis(UNDO_WINDOW_MS)
+        _state.update {
+            it.copy(pendingUndo = PendingBatchUndo(itemIds, drafts, deadline))
+        }
+        undoJob = viewModelScope.launch {
+            while (isActive) {
+                delay(UNDO_TICK_MS)
+                onUndoTick()
+                if (_state.value.pendingUndo == null) break
+            }
+        }
+    }
+
+    /** 五秒内撤回本次整批添加；内容恢复为草稿，必须由用户手动保存。 */
+    fun onUndoBatch() {
+        val pending = _state.value.pendingUndo ?: return
+        if (_state.value.busy) return
+        if (!clock.now().isBefore(pending.deadline)) {
+            onUndoTick()
+            return
+        }
+        undoJob?.cancel()
+        undoJob = null
+        action {
+            try {
+                useCases.undoBatchCreation(pending.itemIds)
+            } catch (e: Exception) {
+                _state.update { it.copy(pendingUndo = null) }
+                throw e
+            }
+            autoSaveSuppressed = true
+            _state.value = _state.value.copy(
+                pendingUndo = null,
+                aiDrafts = pending.drafts,
+                selectedAiDraftId = pending.drafts.firstOrNull()?.itemId,
+                aiError = null,
+                autoSaveDeadline = null,
+                autoSaveRemainingMs = 0,
+                voicePanelOpen = false,
+                voiceElapsedMs = 0,
+                voiceWaveform = emptyList(),
+                voiceHasSpoken = false,
+                voiceTextEditing = false,
+                voiceLimitReached = false,
+                voiceDiscardConfirmVisible = false,
+                message = "已撤销本次添加，内容已恢复为草稿；请核对后手动保存",
+            )
+            reload()
+        }
+    }
+
     private fun performAutoSave() {
         if (_state.value.busy || _state.value.autoSaveDeadline == null) return
         performAutoSaveOnce()
@@ -1606,6 +1683,7 @@ class TodoViewModel @JvmOverloads constructor(
 
     private fun saveAiInputs(inputs: List<TodoDraftInput>, automatic: Boolean = false) {
         cancelAutoSave()
+        val savedDrafts = _state.value.aiDrafts
         action {
             val results = useCases.confirmDrafts(inputs)
             _state.value = _state.value.copy(
@@ -1635,6 +1713,7 @@ class TodoViewModel @JvmOverloads constructor(
                 autoSaveDeadline = null,
                 autoSaveRemainingMs = 0,
             )
+            startUndoWindow(results.map { it.item.id }, savedDrafts)
             reload()
         }
     }
@@ -1959,6 +2038,7 @@ class TodoViewModel @JvmOverloads constructor(
         aiGeneration++
         aiJob?.cancel()
         autoSaveJob?.cancel()
+        undoJob?.cancel()
         cancelSpeechResources()
         super.onCleared()
     }
@@ -1972,6 +2052,8 @@ class TodoViewModel @JvmOverloads constructor(
         const val SPEECH_LEVEL = 0.035f
         const val AUTO_SAVE_DELAY_MS = 2_000L
         const val AUTO_SAVE_TICK_MS = 100L
+        const val UNDO_WINDOW_MS = 5_000L
+        const val UNDO_TICK_MS = 100L
     }
 }
 

@@ -564,6 +564,23 @@ class TodoUseCases(
     }
 
     /**
+     * 撤销一次批量添加：永久移除本批事项及刚生成的重复实例，并取消对应提醒。
+     * 这是“撤回添加”，不进入回收站，也不影响本批之外的事项；重复调用无副作用。
+     */
+    suspend fun undoBatchCreation(itemIds: Collection<String>): Int = mutations.withLock {
+        if (itemIds.isEmpty()) return@withLock 0
+        val roots = itemIds.toSet()
+        val all = repo.allIncludingDeleted()
+        val removal = all.filter { it.id in roots || it.seriesId in roots }
+        repo.deleteAll(removal.map { it.id })
+        removal.forEach { item ->
+            scheduler.cancel(item.id)
+            item.reminders.forEach { scheduler.cancelReminder(item.id, it.id) }
+        }
+        removal.size
+    }
+
+    /**
      * 只调整四象限分类：不触碰提醒安排、截止时间、计划日期或清单归属，
      * 也不请求系统重新调度。用户可以在象限页反复调整。
      */

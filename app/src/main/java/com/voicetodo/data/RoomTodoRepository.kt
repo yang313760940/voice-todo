@@ -82,6 +82,14 @@ class RoomTodoRepository(
     override suspend fun delete(id: String) = ready {
         db.withTransaction { dao.deleteDeliveries(id); dao.delete(id) }
     }
+    override suspend fun deleteAll(ids: Collection<String>) = ready {
+        db.withTransaction {
+            ids.forEach {
+                dao.deleteDeliveries(it)
+                dao.delete(it)
+            }
+        }
+    }
     private suspend fun deliveryTime(itemId: String, reminderId: String, revision: Long): Instant? =
         dao.reminderDeliveredAt(itemId, reminderId, revision) ?:
             if (reminderId == itemId) dao.deliveredAt(itemId, revision) else null

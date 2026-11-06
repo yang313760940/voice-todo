@@ -24,6 +24,10 @@ interface TodoRepository {
     suspend fun trashed(): List<TodoItem> = emptyList()
     /** 删除。 */
     suspend fun delete(id: String)
+    /** 原子地永久删除一批事项；撤销本次添加使用，不进入回收站。 */
+    suspend fun deleteAll(ids: Collection<String>) {
+        ids.forEach { delete(it) }
+    }
     suspend fun incomplete(): List<TodoItem> = all().filter { it.completedAt == null }
         .sortedWith(compareBy<TodoItem> { it.remindAt == null }.thenBy { it.remindAt }
             .thenByDescending { it.createdAt }.thenBy { it.id })

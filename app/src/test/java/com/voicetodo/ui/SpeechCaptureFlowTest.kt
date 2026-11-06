@@ -40,6 +40,7 @@ import com.voicetodo.speech.SpeechEvent
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,13 +73,15 @@ class SpeechCaptureFlowTest {
     private val streamFactory = FakeSpeechStreamFactory(stream)
     private val recorder = FakeSpeechRecorder()
     private val recorderFactory = FakeSpeechRecorderFactory(recorder)
+    private val scheduler = RecordedScheduler()
+    private lateinit var useCases: TodoUseCases
 
     @Before
     fun setup() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         db = Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()
         repo = RoomTodoRepository(db, FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai")))
-        val useCases = TodoUseCases(repo, RecordedScheduler(), clock)
+        useCases = TodoUseCases(repo, scheduler, clock)
         vm = ViewModelProvider(store, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
@@ -608,6 +611,71 @@ class SpeechCaptureFlowTest {
         clock.instant = clock.instant.plusMillis(2_100)
         vm.onAutoSaveTick()
         idle()
+        assertTrue(vm.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `undo restores the batch as drafts and cancels its alarms`() {
+        val outside = runBlocking {
+            useCases.confirmDraft("本批之外", remindAt = clock.instant.plusSeconds(3_600)).item
+        }
+        prepareAutoSaveDraft("开会")
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        waitFor { vm.state.value.items.size == 2 && vm.state.value.pendingUndo != null && !vm.state.value.busy }
+
+        val saved = vm.state.value.items.single { it.id != outside.id }
+        assertEquals(1, vm.state.value.pendingUndo!!.count)
+
+        vm.onUndoBatch()
+        waitFor { vm.state.value.pendingUndo == null && !vm.state.value.busy }
+
+        assertEquals(listOf(outside.id), vm.state.value.items.map { it.id })
+        assertTrue(scheduler.cancelled.contains(saved.id))
+        assertFalse(scheduler.cancelled.contains(outside.id))
+        assertEquals("开会", vm.state.value.aiDrafts.single().title)
+        assertNull(vm.state.value.autoSaveDeadline)
+
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        idle()
+        assertEquals("撤销后的草稿不重新启动自动保存", 1, vm.state.value.items.size)
+
+        vm.onConfirmAiDraft()
+        waitFor { vm.state.value.items.size == 2 && !vm.state.value.busy }
+        assertTrue(vm.state.value.aiDrafts.isEmpty())
+    }
+
+    @Test
+    fun `undo window expires after five seconds`() {
+        prepareAutoSaveDraft("五秒撤销")
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        waitFor { vm.state.value.items.size == 1 && vm.state.value.pendingUndo != null && !vm.state.value.busy }
+
+        clock.instant = clock.instant.plusMillis(5_100)
+        vm.onUndoTick()
+        assertNull(vm.state.value.pendingUndo)
+
+        vm.onUndoBatch()
+        idle()
+        assertEquals("窗口结束后不能再撤销", 1, vm.state.value.items.size)
+    }
+
+    @Test
+    fun `saved batch shows undo bar and restores the editable draft screen`() {
+        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        prepareAutoSaveDraft("撤销提示")
+        clock.instant = clock.instant.plusMillis(2_100)
+        vm.onAutoSaveTick()
+        waitFor { vm.state.value.pendingUndo != null && vm.state.value.items.size == 1 && !vm.state.value.busy }
+
+        compose.onNodeWithTag("undo_bar").assertExists()
+        compose.onNodeWithTag("undo_button").performClick()
+        waitFor { vm.state.value.pendingUndo == null && !vm.state.value.busy }
+
+        compose.onNodeWithTag("ai_draft_screen").assertExists()
+        compose.onNodeWithTag("ai_draft_title_field").assertTextContains("撤销提示")
         assertTrue(vm.state.value.items.isEmpty())
     }
 

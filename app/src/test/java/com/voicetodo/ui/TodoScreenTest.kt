@@ -77,6 +77,7 @@ class TodoScreenTest {
     @Test fun savingWithoutReminderCreatesAnUntimedItemAndGivesDistinctFeedback() {
         openAdd()
         compose.onNodeWithTag("title_field").performTextInput("Untimed")
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("save_without_reminder_button"))
         compose.onNodeWithTag("save_without_reminder_button").performClick()
         waitFor { vm.state.value.items.size == 1 && !vm.state.value.busy }
         compose.onNodeWithTag("message").assertTextEquals("事项已保存（未设置提醒）")

@@ -23,6 +23,7 @@ import com.voicetodo.data.TodoDatabase
 import com.voicetodo.domain.FrozenClock
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.domain.TodoView
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -120,6 +121,28 @@ class TodoInputFlowTest {
         assertEquals(LocalDate.of(2026, 11, 5), saved.plannedDate)
         assertEquals(Instant.parse("2026-11-06T12:30:00Z"), saved.dueAt)
         assertTrue(vm.state.value.draftText.isEmpty())
+    }
+
+    @Test fun noteEnteredInManualFormIsEditableInDetailAndShownInList() {
+        compose.onNodeWithTag("title_field").performTextInput("去社区医院")
+        compose.onNodeWithTag("note_field").performTextInput("带医保卡和身份证")
+        compose.onNodeWithTag("manual_create_button").performClick()
+        compose.onNodeWithTag("detail_note_field")
+            .assertTextContains("带医保卡和身份证", substring = true)
+        compose.onNodeWithTag("detail_note_field").performTextReplacement("带医保卡、身份证和现金")
+        compose.onNodeWithTag("detail_screen").performScrollToNode(
+            androidx.compose.ui.test.hasTestTag("detail_save_button"),
+        )
+        compose.onNodeWithTag("detail_save_button").performClick()
+        waitFor { !vm.state.value.busy && vm.state.value.items.size == 1 }
+
+        val saved = vm.state.value.items.single()
+        assertEquals("带医保卡、身份证和现金", saved.note)
+        compose.runOnIdle { vm.onSelectView(TodoView.Inbox) }
+        waitFor { vm.state.value.selectedView == TodoView.Inbox }
+        compose.onNodeWithTag("item_row_0")
+            .assertIsDisplayed()
+            .assertTextContains("带医保卡、身份证和现金", substring = true)
     }
 
     private fun waitFor(condition: () -> Boolean) {

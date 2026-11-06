@@ -55,6 +55,8 @@ data class TodoEdit(
     val listId: String? = null,
     /** 只有详情页或显式移动操作设置此标志时才改变归属。 */
     val updateList: Boolean = false,
+    /** 备注；为空字符串表示清空，null 表示本次不修改。 */
+    val note: String? = null,
 )
 
 data class UpdateResult(
@@ -251,7 +253,8 @@ class TodoUseCases(
             require(it.isAfter(clock.now())) { "提醒时间必须晚于当前时间" }
         }
         val updated = item.copy(
-            title = title, plannedDate = edit.plannedDate, dueAt = edit.dueAt,
+            title = title, note = edit.note?.trim() ?: item.note,
+            plannedDate = edit.plannedDate, dueAt = edit.dueAt,
             remindAt = edit.remindAt, listId = nextListId,
             reminderRevision = item.reminderRevision + if (changed) 1 else 0,
         )
@@ -299,7 +302,9 @@ class TodoUseCases(
             else edited.reminders.map { it.at.atZone(zone).toLocalTime() }.distinct()
             val newRule = rule.copy(reminderTimes = times).apply { validate() }
             // 标题与清单属于系列级属性，随“本次及以后”同步到重排后的实例。
-            val newSeries = series.copy(title = edited.title, listId = edited.listId, recurrence = newRule)
+            val newSeries = series.copy(
+                title = edited.title, note = edited.note, listId = edited.listId, recurrence = newRule,
+            )
             repo.save(newSeries)
 
             // 只撤销“今天及以后”的未来实例及其闹钟；选中实例与今天之间已经错过的
@@ -369,7 +374,8 @@ class TodoUseCases(
             }
         }
         val updated = item.copy(
-            title = title, plannedDate = edit.plannedDate, dueAt = edit.dueAt,
+            title = title, note = edit.note?.trim() ?: item.note,
+            plannedDate = edit.plannedDate, dueAt = edit.dueAt,
             remindAt = reminders.firstOrNull()?.at, reminders = reminders,
             reminderRevision = if (changed) nextRevision else item.reminderRevision,
         )
@@ -445,6 +451,7 @@ class TodoUseCases(
         itemId: String = UUID.randomUUID().toString(),
         suggestedQuadrant: Quadrant? = null,
         listId: String? = null,
+        note: String = "",
     ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
@@ -476,6 +483,7 @@ class TodoUseCases(
             val item = TodoItem(
                 id = itemId,
                 title = clean,
+                note = note.trim(),
                 remindAt = normalized.first().at,
                 plannedDate = plannedDate,
                 dueAt = dueAt,
@@ -495,6 +503,7 @@ class TodoUseCases(
         val item = TodoItem(
             id = itemId,
             title = clean,
+            note = note.trim(),
             remindAt = remindAt,
             plannedDate = plannedDate,
             dueAt = dueAt,
@@ -583,6 +592,7 @@ class TodoUseCases(
         title: String,
         rule: RecurrenceRule,
         listId: String? = null,
+        note: String = "",
     ): ConfirmResult = mutations.withLock {
         val clean = title.trim()
         require(clean.isNotEmpty()) { "标题不能为空" }
@@ -591,6 +601,7 @@ class TodoUseCases(
         val now = clock.now()
         val series = TodoItem(
             title = clean,
+            note = note.trim(),
             createdAt = now,
             listId = listId,
             recurrence = rule,
@@ -989,6 +1000,7 @@ class TodoUseCases(
                 val occurrence = TodoItem(
                     id = rule.occurrenceId(series.id, date),
                     title = series.title,
+                    note = series.note,
                     remindAt = futureInstants.min(),
                     plannedDate = date,
                     createdAt = now,
@@ -1022,6 +1034,7 @@ class TodoUseCases(
             return TodoItem(
                 id = draft.itemId,
                 title = title,
+                note = draft.edit.note?.trim().orEmpty(),
                 createdAt = now,
                 quadrant = draft.quadrant,
                 suggestedQuadrant = draft.suggestedQuadrant,
@@ -1041,6 +1054,7 @@ class TodoUseCases(
         return TodoItem(
             id = draft.itemId,
             title = title,
+            note = draft.edit.note?.trim().orEmpty(),
             remindAt = reminders.firstOrNull()?.at,
             plannedDate = draft.edit.plannedDate,
             dueAt = draft.edit.dueAt,
@@ -1084,6 +1098,7 @@ class TodoUseCases(
                 instances += TodoItem(
                     id = rule.occurrenceId(series.id, date),
                     title = series.title,
+                    note = series.note,
                     remindAt = instants.filter { it.isAfter(now) }.minOrNull(),
                     plannedDate = date,
                     createdAt = now,

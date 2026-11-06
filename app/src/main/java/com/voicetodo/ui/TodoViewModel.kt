@@ -103,6 +103,7 @@ data class ReminderDraft(
 data class DetailDraft(
     val original: TodoItem?,
     val title: String,
+    val note: String = "",
     val plannedDate: String,
     val dueAt: String,
     val remindAt: String,
@@ -135,6 +136,7 @@ data class DetailDraft(
             }
             return TodoEdit(
                 title = title,
+                note = note,
                 plannedDate = plannedDate.trim().takeIf { it.isNotEmpty() }?.let(LocalDate::parse),
                 dueAt = due,
                 remindAt = reminderEdits.firstOrNull()?.at,
@@ -153,13 +155,29 @@ data class DetailDraft(
                 if (it.beforeDue == null) ReminderDraft(it.id, ReminderDraftKind.Specified, timeText(it.at, zone))
                 else ReminderDraft(it.id, ReminderDraftKind.Relative, it.beforeDue.toMinutes().toString())
             } else listOf(ReminderDraft(item.id, ReminderDraftKind.Specified, timeText(item.remindAt, zone)))
-            return DetailDraft(item, item.title, item.plannedDate?.toString().orEmpty(),
-                timeText(item.dueAt, zone), timeText(item.remindAt, zone), rules, item.listId,
-                seriesRule = series?.recurrence)
+            return DetailDraft(
+                original = item,
+                title = item.title,
+                note = item.note,
+                plannedDate = item.plannedDate?.toString().orEmpty(),
+                dueAt = timeText(item.dueAt, zone),
+                remindAt = timeText(item.remindAt, zone),
+                reminders = rules,
+                listId = item.listId,
+                seriesRule = series?.recurrence,
+            )
         }
-        fun forCreation(title: String, listId: String? = null) = DetailDraft(
-            null, title, "", "", "", listOf(ReminderDraft(kind = ReminderDraftKind.Specified)), listId,
-        )
+        fun forCreation(title: String, listId: String? = null, note: String = "") =
+            DetailDraft(
+                original = null,
+                title = title,
+                note = note,
+                plannedDate = "",
+                dueAt = "",
+                remindAt = "",
+                reminders = listOf(ReminderDraft(kind = ReminderDraftKind.Specified)),
+                listId = listId,
+            )
         fun timeText(at: Instant?, zone: ZoneId): String =
             at?.atZone(zone)?.toLocalDateTime()?.toString()?.replace('T', ' ').orEmpty()
     }
@@ -180,6 +198,7 @@ data class UiState(
     val storageError: String? = null,
     val now: Instant = Instant.EPOCH,
     val draftText: String = "",
+    val draftNote: String = "",
     val draftHasTime: Boolean = false,
     val draftTime: Instant? = null,
     val inputError: String? = null,
@@ -366,6 +385,7 @@ class TodoViewModel @JvmOverloads constructor(
             addOpen = true,
             addTargetListId = target,
             draftText = "",
+            draftNote = "",
             draftHasTime = false,
             draftTime = null,
             inputError = null,
@@ -386,6 +406,7 @@ class TodoViewModel @JvmOverloads constructor(
             addOpen = false,
             addTargetListId = null,
             draftText = "",
+            draftNote = "",
             draftHasTime = false,
             draftTime = null,
             inputError = null,
@@ -668,7 +689,7 @@ class TodoViewModel @JvmOverloads constructor(
             return
         }
         _state.value = s.copy(
-            detail = DetailDraft.forCreation(s.draftText, s.addTargetListId),
+            detail = DetailDraft.forCreation(s.draftText, s.addTargetListId, s.draftNote),
             inputError = null,
             message = null,
         )
@@ -680,6 +701,10 @@ class TodoViewModel @JvmOverloads constructor(
         var at = LocalDateTime.of(now.toLocalDate(), LocalTime.of(hour, minute))
         if (!at.isAfter(now)) at = at.plusDays(1)
         _state.value = _state.value.copy(draftHasTime = true, draftTime = at.atZone(zoneId).toInstant())
+    }
+
+    fun onDraftNoteChange(note: String) {
+        _state.value = _state.value.copy(draftNote = note, inputError = null)
     }
 
     fun onSave() = save(withoutReminder = false)
@@ -700,10 +725,12 @@ class TodoViewModel @JvmOverloads constructor(
             return
         }
         action {
-            val result = useCases.confirmDraft(s.draftText, at, listId = s.addTargetListId)
+            val result = useCases.confirmDraft(
+                s.draftText, at, listId = s.addTargetListId, note = s.draftNote,
+            )
             _state.value = _state.value.copy(
                 addOpen = false, addTargetListId = null,
-                draftText = "", draftHasTime = false, draftTime = null,
+                draftText = "", draftNote = "", draftHasTime = false, draftTime = null,
                 inputError = null,
                 speechState = SpeechUiState.Idle,
                 speechPartialText = "",
@@ -1115,6 +1142,10 @@ class TodoViewModel @JvmOverloads constructor(
         if (!_state.value.busy) _state.value = _state.value.copy(detail = _state.value.detail?.copy(title = title))
     }
 
+    fun onDetailNoteChange(note: String) {
+        if (!_state.value.busy) _state.value = _state.value.copy(detail = _state.value.detail?.copy(note = note))
+    }
+
     fun onDetailValueChange(field: DetailField, value: String) {
         val detail = _state.value.detail ?: return
         if (_state.value.busy) return
@@ -1233,7 +1264,9 @@ class TodoViewModel @JvmOverloads constructor(
             val original = detail.original
             val message = if (original == null) {
                 if (detail.repeat != RepeatDraft.None) {
-                    val result = useCases.createRecurring(edit.title, recurrenceRule(detail), edit.listId)
+                    val result = useCases.createRecurring(
+                        edit.title, recurrenceRule(detail), edit.listId, note = edit.note.orEmpty(),
+                    )
                     _state.value = _state.value.copy(addOpen = false, addTargetListId = null)
                     recurrenceMessage(result.outcome)
                 } else {
@@ -1249,11 +1282,13 @@ class TodoViewModel @JvmOverloads constructor(
                         edit.plannedDate,
                         edit.dueAt,
                         listId = edit.listId,
+                        note = edit.note.orEmpty(),
                     )
                     _state.value = _state.value.copy(
                         addOpen = false,
                         addTargetListId = null,
                         draftText = "",
+                        draftNote = "",
                         draftHasTime = false,
                         draftTime = null,
                         inputError = null,

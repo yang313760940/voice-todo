@@ -34,6 +34,8 @@ data class TodoListEntity(
 data class TodoEntity(
     @PrimaryKey val id: String,
     val title: String,
+    /** 独立备注；旧数据升级后为空。 */
+    @ColumnInfo(defaultValue = "''") val note: String = "",
     val remindAt: Instant?,
     val plannedDate: LocalDate?,
     val dueAt: Instant?,
@@ -64,6 +66,7 @@ data class TodoEntity(
     fun item() = TodoItem(
         id = id,
         title = title,
+        note = note,
         remindAt = remindAt,
         plannedDate = plannedDate,
         dueAt = dueAt,
@@ -87,6 +90,7 @@ data class TodoEntity(
         fun from(item: TodoItem) = TodoEntity(
             id = item.id,
             title = item.title,
+            note = item.note,
             remindAt = item.remindAt,
             plannedDate = item.plannedDate,
             dueAt = item.dueAt,
@@ -224,7 +228,7 @@ interface TodoDao {
         FocusSettingsEntity::class,
         TodoListEntity::class,
     ],
-    version = 10,
+    version = 11,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -233,6 +237,7 @@ interface TodoDao {
         AutoMigration(from = 7, to = 8),
         AutoMigration(from = 8, to = 9),
         AutoMigration(from = 9, to = 10),
+        AutoMigration(from = 10, to = 11),
     ],
     exportSchema = true,
 )

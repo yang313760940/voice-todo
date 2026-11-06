@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -535,6 +536,11 @@ private fun AddTodoScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
                 modifier = Modifier.fillMaxWidth().testTag("title_field"))
         }
         item {
+            OutlinedTextField(value = state.draftNote, onValueChange = vm::onDraftNoteChange,
+                label = { Text("备注（可选，不进入提醒正文）") }, enabled = enabled,
+                minLines = 2, modifier = Modifier.fillMaxWidth().testTag("note_field"))
+        }
+        item {
             Card(Modifier.fillMaxWidth().testTag("ai_card")) {
                 Column(Modifier.fillMaxWidth().padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -781,6 +787,11 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
             OutlinedTextField(value = detail.title, onValueChange = vm::onDetailTitleChange,
                 label = { Text("标题") }, enabled = editable,
                 modifier = Modifier.fillMaxWidth().testTag("detail_title_field"))
+        }
+        item {
+            OutlinedTextField(value = detail.note, onValueChange = vm::onDetailNoteChange,
+                label = { Text("备注（可选，不进入提醒正文）") }, enabled = editable,
+                minLines = 2, modifier = Modifier.fillMaxWidth().testTag("detail_note_field"))
         }
         if (original == null) {
             item { RecurrenceEditor(detail, vm) }
@@ -1098,6 +1109,15 @@ private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, e
     Card(modifier = Modifier.fillMaxWidth().testTag(tag).clickable(enabled = enabled, onClick = onOpen)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(item.title, fontWeight = FontWeight.Medium)
+            if (item.note.isNotBlank()) {
+                Text(
+                    item.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("todo_note_${item.id}"),
+                )
+            }
             Text("象限：${item.quadrant.label}", style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("todo_quadrant_${item.id}"))
             item.listId?.let { listId ->

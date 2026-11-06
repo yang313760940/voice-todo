@@ -217,6 +217,25 @@ class DataBackupEndToEndTest {
         assertTrue(backupsDir.listFiles().orEmpty().isEmpty())
     }
 
+    @Test fun noteRoundTripsAndLegacyBackupWithoutNoteImportsAsEmpty() = runTest {
+        useCases.confirmDraft(
+            "复诊",
+            remindAt = start.plusSeconds(3600),
+            note = "地点：社区医院\n带医保卡",
+        )
+        val exported = backup.export()
+        assertTrue(exported.json.contains("地点：社区医院"))
+
+        backup.replace(exported.json)
+        assertEquals("地点：社区医院\n带医保卡", useCases.listItems().single().note)
+
+        val legacy = JSONObject(exported.json).apply {
+            getJSONObject("data").getJSONArray("items").getJSONObject(0).remove("note")
+        }.toString()
+        backup.replace(legacy)
+        assertEquals("", useCases.listItems().single().note)
+    }
+
     @Test fun restoreCopyCanBePreviewedAndImported() = runTest {
         useCases.confirmDraft("原始数据", remindAt = start.plusSeconds(3600), itemId = "original")
         val original = backup.export()

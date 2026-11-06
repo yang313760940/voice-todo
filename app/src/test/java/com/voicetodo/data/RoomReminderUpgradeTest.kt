@@ -245,4 +245,75 @@ class RoomReminderUpgradeTest {
             db.close()
         }
     }
+
+    @Test fun versionTenItemsGainEmptyNoteAndPersistEdits() = runTest {
+        val file = temp.newFile("version-ten.db")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { old ->
+            old.execSQL(
+                "CREATE TABLE `todos` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `remindAt` TEXT, " +
+                    "`plannedDate` TEXT, `dueAt` TEXT, `completedAt` TEXT, `createdAt` TEXT NOT NULL, " +
+                    "`reminderRevision` INTEGER NOT NULL, `reminders` TEXT NOT NULL DEFAULT '[]', " +
+                    "`quadrant` TEXT NOT NULL DEFAULT 'NotImportantNotUrgent', `suggestedQuadrant` TEXT, " +
+                    "`listId` TEXT, `recurrenceRule` TEXT, `seriesId` TEXT, `occurrenceDate` TEXT, " +
+                    "`persistentRing` INTEGER NOT NULL DEFAULT 0, `readAloud` INTEGER NOT NULL DEFAULT 0, " +
+                    "`readAloudWhenLocked` INTEGER NOT NULL DEFAULT 0, `dismissedAt` TEXT, " +
+                    "`deletedAt` TEXT DEFAULT NULL, PRIMARY KEY(`id`))",
+            )
+            old.execSQL("CREATE INDEX `index_todos_listId` ON `todos` (`listId`)")
+            old.execSQL(
+                "CREATE TABLE `deliveries` (`itemId` TEXT NOT NULL, `reminderRevision` INTEGER NOT NULL, " +
+                    "`deliveredAt` TEXT NOT NULL, PRIMARY KEY(`itemId`, `reminderRevision`))",
+            )
+            old.execSQL(
+                "CREATE TABLE `reminder_deliveries` (`itemId` TEXT NOT NULL, `reminderId` TEXT NOT NULL, " +
+                    "`revision` INTEGER NOT NULL, `deliveredAt` TEXT NOT NULL, " +
+                    "PRIMARY KEY(`itemId`, `reminderId`, `revision`), " +
+                    "FOREIGN KEY(`itemId`) REFERENCES `todos`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            )
+            old.execSQL("CREATE INDEX `index_reminder_deliveries_itemId` ON `reminder_deliveries` (`itemId`)")
+            old.execSQL("CREATE TABLE `storage_migrations` (`name` TEXT NOT NULL, PRIMARY KEY(`name`))")
+            old.execSQL(
+                "CREATE TABLE `focus_sessions` (`id` TEXT NOT NULL, `phase` TEXT NOT NULL, " +
+                    "`startedAt` TEXT NOT NULL, `endsAt` TEXT NOT NULL, `lastResumedAt` TEXT NOT NULL, " +
+                    "`durationSeconds` INTEGER NOT NULL, `pausedAt` TEXT, " +
+                    "`accumulatedFocusSeconds` INTEGER NOT NULL, `completedPomodoros` INTEGER NOT NULL, " +
+                    "`itemId` TEXT, `state` TEXT NOT NULL, `endedAt` TEXT, PRIMARY KEY(`id`))",
+            )
+            old.execSQL(
+                "CREATE TABLE `focus_settings` (`id` INTEGER NOT NULL, `focusMinutes` INTEGER NOT NULL, " +
+                    "`shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, " +
+                    "`longBreakEvery` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+            )
+            old.execSQL("INSERT INTO `focus_settings` VALUES (1, 25, 5, 15, 4)")
+            old.execSQL(
+                "CREATE TABLE `todo_lists` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                    "`createdAt` TEXT NOT NULL, PRIMARY KEY(`id`))",
+            )
+            old.execSQL(
+                "INSERT INTO todos (id, title, createdAt, reminderRevision) " +
+                    "VALUES ('v10', '升级前无备注事项', '2026-11-04T08:00:00.000000000Z', 0)",
+            )
+            old.version = 10
+        }
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val db = Room.databaseBuilder(context, TodoDatabase::class.java, file.absolutePath)
+            .addMigrations(TodoDatabase.MIGRATION_3_4, TodoDatabase.MIGRATION_5_6)
+            .build()
+        try {
+            val repo = RoomTodoRepository(
+                db, FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai")),
+            )
+            val useCases = TodoUseCases(
+                repo, RecordedScheduler(), FrozenClock(Instant.parse("2026-11-04T11:00:00Z")),
+            )
+            val migrated = useCases.findItem("v10")
+            assertEquals("升级前无备注事项", migrated.title)
+            assertEquals("", migrated.note)
+
+            repo.save(migrated.copy(note = "带身份证和复印件"))
+            assertEquals("带身份证和复印件", useCases.findItem("v10").note)
+        } finally {
+            db.close()
+        }
+    }
 }

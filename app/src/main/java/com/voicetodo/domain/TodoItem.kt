@@ -14,6 +14,8 @@ data class TodoItem(
     val id: String = UUID.randomUUID().toString(),
     /** 可编辑标题（来自识别文字，用户可改）。 */
     val title: String,
+    /** 独立备注：地点、材料等细节；为空表示没有备注，不参与提醒正文。 */
+    val note: String = "",
     /** 提醒时刻；为空表示该事项当前没有提醒。 */
     val remindAt: Instant? = null,
     /** 计划日期；只表达用户计划，本身不安排闹钟。 */

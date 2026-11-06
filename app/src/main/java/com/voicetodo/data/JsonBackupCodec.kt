@@ -200,6 +200,7 @@ object JsonBackupCodec : BackupCodec {
         return TodoItem(
             id = id,
             title = title,
+            note = json.optionalString("note").orEmpty(),
             remindAt = optionalInstant(json, "remindAt", label),
             plannedDate = optionalDate(json, "plannedDate", label),
             dueAt = dueAt,
@@ -319,6 +320,7 @@ object JsonBackupCodec : BackupCodec {
     private fun TodoItem.toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("title", title)
+        put("note", note)
         putNullable("remindAt", remindAt?.toString())
         putNullable("plannedDate", plannedDate?.toString())
         putNullable("dueAt", dueAt?.toString())

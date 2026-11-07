@@ -41,7 +41,6 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.alarm.ReminderCapabilities
 import com.voicetodo.domain.BackupPreview
-import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.RestoreCopyInfo
 import com.voicetodo.domain.TrashedItem
 import com.voicetodo.settings.AppPreferences
@@ -138,7 +137,6 @@ fun SettingsScreen(
     when (destination) {
         SettingsDestination.Root -> MySettingsContent(
             preferences = settingsState.preferences,
-            focusSettings = settingsState.focusSettings,
             capabilities = settingsState.capabilities,
             aiConfigured = todoState.aiConfigured,
             speechConfigured = todoState.speechConfigured,
@@ -146,11 +144,9 @@ fun SettingsScreen(
             voiceLanguageLabel = com.voicetodo.speech.VoiceLanguages.label(
                 todoState.voiceLanguage,
             ),
-            busy = settingsState.busy,
             message = settingsState.message,
             onThemeChange = settingsVm::setTheme,
             onFontSizeChange = settingsVm::setFontSize,
-            onFocusSettingsChange = settingsVm::updateFocusSettings,
             onOpenVoiceAi = todoVm::onOpenAiSettings,
             onOpenNotificationSettings = {
                 onOpenReminderSettings(ReminderSettingsTarget.NotificationChannel)
@@ -191,17 +187,14 @@ fun SettingsScreen(
 @Composable
 internal fun MySettingsContent(
     preferences: AppPreferences,
-    focusSettings: FocusSettings,
     capabilities: ReminderCapabilities?,
     aiConfigured: Boolean,
     speechConfigured: Boolean,
     voiceProviderLabel: String? = null,
     voiceLanguageLabel: String? = null,
-    busy: Boolean,
     message: String?,
     onThemeChange: (ThemePreference) -> Unit,
     onFontSizeChange: (FontSizePreference) -> Unit,
-    onFocusSettingsChange: (FocusSettings) -> Unit,
     onOpenVoiceAi: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onOpenPermissions: () -> Unit,
@@ -237,50 +230,6 @@ internal fun MySettingsContent(
                 ) {
                     Text("打开系统通知与声音设置")
                 }
-            }
-        }
-        item {
-            SettingsSection("番茄设置", "settings_pomodoro") {
-                Text(
-                    text = "修改后立即保存；当前正在运行的会话保持原时长。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                NumberStepper(
-                    label = "专注",
-                    value = focusSettings.focusMinutes,
-                    unit = "分钟",
-                    range = 1..180,
-                    enabled = !busy,
-                    tag = "focus_minutes",
-                    onChange = { onFocusSettingsChange(focusSettings.copy(focusMinutes = it)) },
-                )
-                NumberStepper(
-                    label = "短休息",
-                    value = focusSettings.shortBreakMinutes,
-                    unit = "分钟",
-                    range = 1..60,
-                    enabled = !busy,
-                    tag = "short_break_minutes",
-                    onChange = { onFocusSettingsChange(focusSettings.copy(shortBreakMinutes = it)) },
-                )
-                NumberStepper(
-                    label = "长休息",
-                    value = focusSettings.longBreakMinutes,
-                    unit = "分钟",
-                    range = 1..120,
-                    enabled = !busy,
-                    tag = "long_break_minutes",
-                    onChange = { onFocusSettingsChange(focusSettings.copy(longBreakMinutes = it)) },
-                )
-                NumberStepper(
-                    label = "长休息间隔",
-                    value = focusSettings.longBreakEvery,
-                    unit = "次专注",
-                    range = 1..20,
-                    enabled = !busy,
-                    tag = "long_break_every",
-                    onChange = { onFocusSettingsChange(focusSettings.copy(longBreakEvery = it)) },
-                )
             }
         }
         item {
@@ -443,38 +392,6 @@ private fun FontChip(
         label = { Text(label) },
         modifier = Modifier.testTag("font_${value.name.lowercase()}"),
     )
-}
-
-@Composable
-private fun NumberStepper(
-    label: String,
-    value: Int,
-    unit: String,
-    range: IntRange,
-    enabled: Boolean,
-    tag: String,
-    onChange: (Int) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("$label：$value $unit", modifier = Modifier.weight(1f))
-        OutlinedButton(
-            onClick = { if (value > range.first) onChange(value - 1) },
-            enabled = enabled && value > range.first,
-            modifier = Modifier.testTag("${tag}_minus"),
-        ) {
-            Text("−")
-        }
-        OutlinedButton(
-            onClick = { if (value < range.last) onChange(value + 1) },
-            enabled = enabled && value < range.last,
-            modifier = Modifier.testTag("${tag}_plus"),
-        ) {
-            Text("+")
-        }
-    }
 }
 
 @Composable

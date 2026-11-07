@@ -13,7 +13,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.voicetodo.alarm.ReminderCapabilities
-import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.TrashedItem
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.settings.AppPreferences
@@ -36,10 +35,8 @@ class SettingsScreenTest {
         compose.setContent {
             MaterialTheme {
                 var preferences by remember { mutableStateOf(AppPreferences()) }
-                var focusSettings by remember { mutableStateOf(FocusSettings()) }
                 MySettingsContent(
                     preferences = preferences,
-                    focusSettings = focusSettings,
                     capabilities = ReminderCapabilities(
                         canScheduleExactAlarm = true,
                         canPostNotifications = false,
@@ -49,11 +46,9 @@ class SettingsScreenTest {
                     speechConfigured = true,
                     voiceProviderLabel = "豆包",
                     voiceLanguageLabel = "普通话",
-                    busy = false,
                     message = null,
                     onThemeChange = { preferences = preferences.copy(theme = it) },
                     onFontSizeChange = { preferences = preferences.copy(fontSize = it) },
-                    onFocusSettingsChange = { focusSettings = it },
                     onOpenVoiceAi = { opened = "ai" },
                     onOpenNotificationSettings = { opened = "notifications" },
                     onOpenPermissions = { opened = "permissions" },
@@ -65,7 +60,8 @@ class SettingsScreenTest {
         }
 
         compose.onNodeWithTag("settings_reminder").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("settings_pomodoro").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("settings_pomodoro").assertDoesNotExist()
+        compose.onNodeWithTag("focus_minutes_plus").assertDoesNotExist()
         compose.onNodeWithTag("settings_appearance").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("settings_voice_ai").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("语音识别：豆包 在线（已配置）", substring = true)
@@ -77,8 +73,6 @@ class SettingsScreenTest {
 
         compose.onNodeWithTag("theme_dark").performScrollTo().performClick().assertIsSelected()
         compose.onNodeWithTag("font_large").performScrollTo().performClick().assertIsSelected()
-        compose.onNodeWithTag("focus_minutes_plus").performScrollTo().performClick()
-        compose.onNodeWithText("专注：26 分钟").assertIsDisplayed()
 
         compose.onNodeWithTag("open_ai_settings").performScrollTo().performClick()
         assertEquals("ai", opened)

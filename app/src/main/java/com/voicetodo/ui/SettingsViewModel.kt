@@ -57,7 +57,6 @@ data class SettingsUiState(
     val preferences: AppPreferences = AppPreferences(),
     val focusSettings: FocusSettings = FocusSettings(),
     val capabilities: ReminderCapabilities? = null,
-    val busy: Boolean = false,
     val message: String? = null,
     val dataBackup: DataBackupUiState = DataBackupUiState(),
     val trash: TrashUiState = TrashUiState(),
@@ -103,27 +102,6 @@ class SettingsViewModel @JvmOverloads constructor(
             .onFailure { error ->
                 _state.value = _state.value.copy(message = error.message ?: "字体大小保存失败")
             }
-    }
-
-    fun updateFocusSettings(settings: FocusSettings) {
-        if (_state.value.busy) return
-        val previous = _state.value.focusSettings
-        _state.value = _state.value.copy(focusSettings = settings, busy = true, message = null)
-        viewModelScope.launch {
-            try {
-                operations.withLock { focusUseCases.updateSettings(settings) }
-                _state.value = _state.value.copy(
-                    busy = false,
-                    message = "番茄设置已保存",
-                )
-            } catch (error: Exception) {
-                _state.value = _state.value.copy(
-                    focusSettings = previous,
-                    busy = false,
-                    message = error.message ?: "番茄设置保存失败",
-                )
-            }
-        }
     }
 
     fun refreshCapabilities() {

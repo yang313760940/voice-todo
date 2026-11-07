@@ -10,7 +10,6 @@ import com.voicetodo.data.RoomTodoRepository
 import com.voicetodo.data.TodoDatabase
 import com.voicetodo.domain.Clock
 import com.voicetodo.domain.FrozenClock
-import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.FocusUseCases
 import com.voicetodo.domain.InMemoryFocusRepository
 import com.voicetodo.domain.RecordedFocusScheduler
@@ -32,7 +31,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], application = Application::class)
 class SettingsViewModelTest {
-    @Test fun appearanceAndPomodoroChangesPersistImmediately() {
+    @Test fun appearanceChangesPersistImmediately() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         app.deleteSharedPreferences(AppPreferencesStore.PREFERENCES_NAME)
         val store = AppPreferencesStore(app)
@@ -59,12 +58,10 @@ class SettingsViewModelTest {
 
         vm.setTheme(ThemePreference.Dark)
         vm.setFontSize(FontSizePreference.Large)
-        vm.updateFocusSettings(FocusSettings(30, 6, 18, 3))
         shadowOf(Looper.getMainLooper()).idle()
 
         assertEquals(ThemePreference.Dark, store.load().theme)
         assertEquals(FontSizePreference.Large, store.load().fontSize)
-        assertEquals(FocusSettings(30, 6, 18, 3), runBlocking { repository.settings() })
         assertEquals(false, vm.state.value.capabilities?.canPostNotifications)
     }
 

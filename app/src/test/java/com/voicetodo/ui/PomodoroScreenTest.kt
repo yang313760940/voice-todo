@@ -65,7 +65,8 @@ class PomodoroScreenTest {
     }
 
     @Test fun settingsCanAdjustDefaultDurations() {
-        compose.onNodeWithTag("open_settings_button").performClick()
+        compose.onNodeWithTag("settings_button").performClick()
+        compose.onNodeWithTag("menu_focus_settings").performClick()
         compose.onNodeWithTag("setting_专注分钟").performTextReplacement("30")
         waitFor { vm.state.value.settingsDraft?.focusMinutes == 30 }
         compose.onNodeWithTag("save_settings_button").performClick()

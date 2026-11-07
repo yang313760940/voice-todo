@@ -14,6 +14,7 @@ import com.voicetodo.domain.FocusSnapshot
 import com.voicetodo.domain.FocusUseCases
 import com.voicetodo.domain.SystemClock
 import com.voicetodo.domain.TodoItem
+import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+enum class TimerMode { Pomodoro, Stopwatch }
+
 data class PomodoroUiState(
     val snapshot: FocusSnapshot? = null,
     val items: List<TodoItem> = emptyList(),
@@ -32,6 +35,12 @@ data class PomodoroUiState(
     val message: String? = null,
     val selectedItemId: String? = null,
     val settingsDraft: FocusSettings? = null,
+    val mode: TimerMode = TimerMode.Pomodoro,
+    val stopwatchRunning: Boolean = false,
+    val stopwatchElapsedSeconds: Long = 0,
+    val stopwatchResumedAt: Instant? = null,
+    val showStats: Boolean = false,
+    val showItemPicker: Boolean = true,
 )
 
 class PomodoroViewModel @JvmOverloads constructor(
@@ -73,6 +82,18 @@ class PomodoroViewModel @JvmOverloads constructor(
 
     fun onPickItem(itemId: String?) {
         _state.value = _state.value.copy(selectedItemId = itemId)
+    }
+
+    fun onSelectMode(mode: TimerMode) {
+        _state.value = _state.value.copy(mode = mode)
+    }
+
+    fun onToggleStats() {
+        _state.value = _state.value.copy(showStats = !_state.value.showStats)
+    }
+
+    fun onToggleItemPicker() {
+        _state.value = _state.value.copy(showItemPicker = !_state.value.showItemPicker)
     }
 
     fun onOpenSettings() {
@@ -149,6 +170,41 @@ class PomodoroViewModel @JvmOverloads constructor(
         reload()
     }
 
+    fun onStartStopwatch() {
+        if (_state.value.stopwatchRunning) return
+        _state.value = _state.value.copy(stopwatchRunning = true, stopwatchResumedAt = clock.now())
+    }
+
+    fun onPauseStopwatch() {
+        val current = _state.value
+        val resumedAt = current.stopwatchResumedAt ?: return
+        if (!current.stopwatchRunning) return
+        val elapsed = secondsBetween(resumedAt, clock.now())
+        _state.value = current.copy(
+            stopwatchRunning = false,
+            stopwatchResumedAt = null,
+            stopwatchElapsedSeconds = current.stopwatchElapsedSeconds + elapsed,
+        )
+    }
+
+    fun onResetStopwatch() {
+        _state.value = _state.value.copy(
+            stopwatchRunning = false,
+            stopwatchResumedAt = null,
+            stopwatchElapsedSeconds = 0,
+        )
+    }
+
+    fun stopwatchSeconds(now: Instant): Long {
+        val current = _state.value
+        val resumedAt = current.stopwatchResumedAt
+        return if (current.stopwatchRunning && resumedAt != null) {
+            current.stopwatchElapsedSeconds + secondsBetween(resumedAt, now)
+        } else {
+            current.stopwatchElapsedSeconds
+        }
+    }
+
     private fun action(block: suspend () -> Unit) {
         if (_state.value.busy) return
         _state.value = _state.value.copy(busy = true, message = null)
@@ -164,4 +220,7 @@ class PomodoroViewModel @JvmOverloads constructor(
         val items = storage.incomplete()
         _state.value = _state.value.copy(snapshot = snapshot, items = items, now = clock.now())
     }
+
+    private fun secondsBetween(from: Instant, to: Instant): Long =
+        Duration.between(from, to).seconds.coerceAtLeast(0)
 }

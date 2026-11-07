@@ -13,7 +13,6 @@ import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.FocusSnapshot
 import com.voicetodo.domain.FocusUseCases
 import com.voicetodo.domain.SystemClock
-import com.voicetodo.domain.TodoItem
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.delay
@@ -29,18 +28,16 @@ enum class TimerMode { Pomodoro, Stopwatch }
 
 data class PomodoroUiState(
     val snapshot: FocusSnapshot? = null,
-    val items: List<TodoItem> = emptyList(),
     val now: Instant = Instant.EPOCH,
     val busy: Boolean = false,
     val message: String? = null,
-    val selectedItemId: String? = null,
     val settingsDraft: FocusSettings? = null,
     val mode: TimerMode = TimerMode.Pomodoro,
+    val selectedPhase: FocusPhase = FocusPhase.Focus,
     val stopwatchRunning: Boolean = false,
     val stopwatchElapsedSeconds: Long = 0,
     val stopwatchResumedAt: Instant? = null,
     val showStats: Boolean = false,
-    val showItemPicker: Boolean = true,
 )
 
 class PomodoroViewModel @JvmOverloads constructor(
@@ -80,20 +77,17 @@ class PomodoroViewModel @JvmOverloads constructor(
         }
     }
 
-    fun onPickItem(itemId: String?) {
-        _state.value = _state.value.copy(selectedItemId = itemId)
-    }
-
     fun onSelectMode(mode: TimerMode) {
         _state.value = _state.value.copy(mode = mode)
     }
 
-    fun onToggleStats() {
-        _state.value = _state.value.copy(showStats = !_state.value.showStats)
+    fun onSelectPhase(phase: FocusPhase) {
+        if (_state.value.snapshot?.session != null) return
+        _state.value = _state.value.copy(selectedPhase = phase)
     }
 
-    fun onToggleItemPicker() {
-        _state.value = _state.value.copy(showItemPicker = !_state.value.showItemPicker)
+    fun onToggleStats() {
+        _state.value = _state.value.copy(showStats = !_state.value.showStats)
     }
 
     fun onOpenSettings() {
@@ -120,10 +114,10 @@ class PomodoroViewModel @JvmOverloads constructor(
 
     fun onStart(phase: FocusPhase = FocusPhase.Focus, endCurrent: Boolean = false) {
         action {
-            val result = useCases.startFocus(phase, _state.value.selectedItemId, endCurrent)
+            val result = useCases.startFocus(phase, endCurrent)
             _state.value = _state.value.copy(
                 message = when {
-                    result.requiresEndingCurrent -> "已有活动会话；继续绑定请先结束当前会话"
+                    result.requiresEndingCurrent -> "已有活动会话；请先结束当前会话"
                     result.previousEndedAt != null -> "已结束上一个会话，并开始新会话"
                     else -> when (phase) {
                         FocusPhase.Focus -> "专注开始"
@@ -217,8 +211,7 @@ class PomodoroViewModel @JvmOverloads constructor(
 
     private suspend fun reload() {
         val snapshot = useCases.snapshot()
-        val items = storage.incomplete()
-        _state.value = _state.value.copy(snapshot = snapshot, items = items, now = clock.now())
+        _state.value = _state.value.copy(snapshot = snapshot, now = clock.now())
     }
 
     private fun secondsBetween(from: Instant, to: Instant): Long =

@@ -14,7 +14,6 @@ import com.voicetodo.data.TodoDatabase
 import com.voicetodo.domain.*
 import java.time.Instant
 import java.time.ZoneId
-import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -37,7 +36,6 @@ class PomodoroScreenTest {
         val todos = RoomTodoRepository(db, FileTodoRepository(app.filesDir, ZoneId.of("Asia/Shanghai")))
         val focus = RoomFocusRepository(db)
         val useCases = FocusUseCases(focus, scheduler, clock, todos, ZoneId.of("Asia/Shanghai"))
-        runBlocking { todos.save(TodoItem(id = "work", title = "整理需求", createdAt = clock.now())) }
         compose.runOnIdle { vm = PomodoroViewModel(app, useCases, todos, clock) }
         compose.setContent { MaterialTheme { PomodoroScreen(vm) } }
         waitFor { vm.state.value.snapshot != null }
@@ -45,11 +43,11 @@ class PomodoroScreenTest {
 
     @After fun teardown() { db.close() }
 
-    @Test fun startsBindsPausesEndsEarlyAndShowsStatistics() {
-        compose.onNodeWithTag("focus_item_work").performClick()
-        compose.onNodeWithTag("start_focus_button").performClick()
+    @Test fun startsPausesResumesAndEndsEarly() {
+        compose.onNodeWithTag("item_picker").assertDoesNotExist()
+        compose.onNodeWithTag("start_button").performClick()
         waitFor { vm.state.value.snapshot?.session != null }
-        Assert.assertEquals("work", vm.state.value.snapshot?.session?.itemId)
+        Assert.assertNull(vm.state.value.snapshot?.session?.itemId)
 
         compose.onNodeWithTag("pause_button").performClick()
         waitFor { vm.state.value.snapshot?.session?.state == FocusSessionState.Paused }
@@ -71,13 +69,13 @@ class PomodoroScreenTest {
         waitFor { vm.state.value.settingsDraft?.focusMinutes == 30 }
         compose.onNodeWithTag("save_settings_button").performClick()
         waitFor { vm.state.value.settingsDraft == null && !vm.state.value.busy }
-        compose.onNodeWithTag("start_focus_button").performClick()
+        compose.onNodeWithTag("start_button").performClick()
         waitFor { vm.state.value.snapshot?.session != null }
         Assert.assertEquals(1800L, vm.state.value.snapshot?.session?.durationSeconds)
     }
 
     @Test fun endedSessionWaitsForConfirmationAndManualBreakDoesNotAutoStart() {
-        compose.onNodeWithTag("start_focus_button").performClick()
+        compose.onNodeWithTag("start_button").performClick()
         waitFor { vm.state.value.snapshot?.session != null }
         val focusSessionId = vm.state.value.snapshot?.session?.id
         Assert.assertNotNull(focusSessionId)
@@ -87,8 +85,21 @@ class PomodoroScreenTest {
         compose.onNodeWithTag("confirm_ended_button").performClick()
         waitFor { vm.state.value.snapshot?.session == null }
         Assert.assertEquals(1, vm.state.value.snapshot?.todayCount)
-        compose.onNodeWithTag("start_short_break_button").performClick()
+        compose.onNodeWithTag("phase_selector").performClick()
+        compose.onNodeWithTag("phase_ShortBreak").performClick()
+        compose.onNodeWithTag("start_button").performClick()
         waitFor { vm.state.value.snapshot?.session?.phase == FocusPhase.ShortBreak }
+    }
+
+    @Test fun stopwatchModeStartsFromSinglePrimaryButton() {
+        compose.onNodeWithTag("mode_stopwatch").performClick()
+        compose.onNodeWithTag("start_stopwatch_button").performClick()
+        waitFor { vm.state.value.stopwatchRunning }
+    }
+
+    @Test fun statsOpenFromTopBarIcon() {
+        compose.onNodeWithTag("stats_button").performClick()
+        compose.onNodeWithTag("stats_dialog").assertIsDisplayed()
     }
 
     private fun waitFor(condition: () -> Boolean) {

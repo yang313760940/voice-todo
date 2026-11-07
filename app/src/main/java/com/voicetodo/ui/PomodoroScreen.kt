@@ -1,6 +1,8 @@
 package com.voicetodo.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,20 +13,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,15 +38,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.voicetodo.domain.FocusPhase
+import com.voicetodo.domain.FocusSession
 import com.voicetodo.domain.FocusSessionState
 import com.voicetodo.domain.FocusSettings
 import com.voicetodo.domain.FocusSnapshot
@@ -51,6 +55,10 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 @Composable
 fun PomodoroScreen(vm: PomodoroViewModel) {
@@ -65,14 +73,12 @@ fun PomodoroScreen(vm: PomodoroViewModel) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).testTag("pomodoro_screen"),
     ) {
         PomodoroTopBar(
-            snapshot = state.snapshot,
+            mode = state.mode,
+            onSelectMode = vm::onSelectMode,
             onOpenSettings = vm::onOpenSettings,
             onShowStats = vm::onToggleStats,
-            onToggleItemPicker = vm::onToggleItemPicker,
         )
-        Spacer(Modifier.height(16.dp))
-        TimerModeSelector(state.mode, vm::onSelectMode)
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
 
         val snapshot = state.snapshot
         val session = snapshot?.session
@@ -86,30 +92,34 @@ fun PomodoroScreen(vm: PomodoroViewModel) {
                 } else {
                     totalSeconds
                 }
-                val progress = if (totalSeconds > 0) {
-                    ((totalSeconds - remaining).toFloat() / totalSeconds).coerceIn(0f, 1f)
-                } else 0f
+                val phaseLabel = when {
+                    session == null -> phaseName(state.selectedPhase)
+                    session.state == FocusSessionState.Paused -> "${phaseName(session.phase)} · 已暂停"
+                    else -> phaseName(session.phase)
+                }
+                PhaseHeader(
+                    label = phaseLabel,
+                    enabled = session == null,
+                    showChevron = session == null,
+                    onSelect = vm::onSelectPhase,
+                )
+                Spacer(Modifier.height(8.dp))
                 TimeRing(
-                    progress = progress,
+                    litFraction = if (totalSeconds > 0) remaining.toFloat() / totalSeconds else 1f,
                     display = formatClock(remaining),
-                    subtitle = when {
-                        session == null -> "专注"
-                        session.state == FocusSessionState.Paused -> "${phaseName(session.phase)} · 已暂停"
-                        else -> phaseName(session.phase)
-                    },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxWidth(0.82f).weight(1f).align(Alignment.CenterHorizontally),
                     tag = "focus_ring",
                 )
-                PomodoroControls(session, state, vm)
+                PomodoroControls(session, state.selectedPhase, state.busy, vm)
             }
             TimerMode.Stopwatch -> {
                 val elapsed = vm.stopwatchSeconds(now)
-                val progress = ((elapsed % 3600).toFloat() / 3600f).coerceIn(0f, 1f)
+                PhaseHeader(label = "正计时", enabled = false, showChevron = false, onSelect = {})
+                Spacer(Modifier.height(8.dp))
                 TimeRing(
-                    progress = progress,
+                    litFraction = ((elapsed % 3600).toFloat() / 3600f).coerceIn(0f, 1f),
                     display = formatClock(elapsed),
-                    subtitle = if (state.stopwatchRunning) "正计时 · 进行中" else "正计时",
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier.fillMaxWidth(0.82f).weight(1f).align(Alignment.CenterHorizontally),
                     tag = "stopwatch_ring",
                 )
                 StopwatchControls(state, vm)
@@ -130,45 +140,41 @@ fun PomodoroScreen(vm: PomodoroViewModel) {
 
 @Composable
 private fun PomodoroTopBar(
-    snapshot: FocusSnapshot?,
+    mode: TimerMode,
+    onSelectMode: (TimerMode) -> Unit,
     onOpenSettings: () -> Unit,
     onShowStats: () -> Unit,
-    onToggleItemPicker: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("番茄统计", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "今日 ${snapshot?.todayCount ?: 0} 番茄",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.testTag("today_count"),
-            )
-            Text(
-                formatDuration(snapshot?.todaySeconds ?: 0),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("today_duration"),
-            )
-            Text(
-                "近 7 天 ${snapshot?.lastSevenDaysCounts?.sumOf { it.second } ?: 0} 番茄",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("last_seven_days"),
-            )
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedIconButton(
+            onClick = onShowStats,
+            modifier = Modifier.align(Alignment.CenterStart).testTag("stats_button"),
+        ) {
+            Icon(Icons.Outlined.Schedule, contentDescription = "统计")
         }
-        SettingsMenu(onOpenSettings = onOpenSettings, onShowStats = onShowStats, onToggleItemPicker = onToggleItemPicker)
+        TimerModeSelector(
+            mode = mode,
+            onSelect = onSelectMode,
+            modifier = Modifier.align(Alignment.Center),
+        )
+        SettingsMenu(
+            onOpenSettings = onOpenSettings,
+            modifier = Modifier.align(Alignment.CenterEnd),
+        )
     }
 }
 
 @Composable
 private fun SettingsMenu(
     onOpenSettings: () -> Unit,
-    onShowStats: () -> Unit,
-    onToggleItemPicker: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("settings_button")) {
+    Box(modifier) {
+        OutlinedIconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.testTag("settings_button"),
+        ) {
             Icon(Icons.Filled.MoreVert, contentDescription = "设置选项")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -177,220 +183,224 @@ private fun SettingsMenu(
                 onClick = { expanded = false; onOpenSettings() },
                 modifier = Modifier.testTag("menu_focus_settings"),
             )
-            DropdownMenuItem(
-                text = { Text("绑定事项") },
-                onClick = { expanded = false; onToggleItemPicker() },
-                modifier = Modifier.testTag("menu_bind_item"),
-            )
-            DropdownMenuItem(
-                text = { Text("统计详情") },
-                onClick = { expanded = false; onShowStats() },
-                modifier = Modifier.testTag("menu_stats"),
-            )
         }
     }
 }
 
 @Composable
-private fun TimerModeSelector(mode: TimerMode, onSelect: (TimerMode) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
+private fun TimerModeSelector(
+    mode: TimerMode,
+    onSelect: (TimerMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        TimerModeSegment(
+            label = "番茄计时",
             selected = mode == TimerMode.Pomodoro,
-            onClick = { onSelect(TimerMode.Pomodoro) },
-            label = { Text("番茄计时") },
             modifier = Modifier.testTag("mode_pomodoro"),
-        )
-        FilterChip(
+        ) { onSelect(TimerMode.Pomodoro) }
+        TimerModeSegment(
+            label = "正计时",
             selected = mode == TimerMode.Stopwatch,
-            onClick = { onSelect(TimerMode.Stopwatch) },
-            label = { Text("正计时") },
             modifier = Modifier.testTag("mode_stopwatch"),
+        ) { onSelect(TimerMode.Stopwatch) }
+    }
+}
+
+@Composable
+private fun TimerModeSegment(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
+    }
+}
+
+@Composable
+private fun PhaseHeader(
+    label: String,
+    enabled: Boolean,
+    showChevron: Boolean,
+    onSelect: (FocusPhase) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .clickable(enabled = enabled) { expanded = true }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .testTag("phase_selector"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (showChevron) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "切换阶段",
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            FocusPhase.values().forEach { phase ->
+                DropdownMenuItem(
+                    text = { Text(phaseName(phase)) },
+                    onClick = {
+                        expanded = false
+                        onSelect(phase)
+                    },
+                    modifier = Modifier.testTag("phase_${phase.name}"),
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun TimeRing(
-    progress: Float,
+    litFraction: Float,
     display: String,
-    subtitle: String,
     modifier: Modifier = Modifier,
     tag: String,
 ) {
-    val track = MaterialTheme.colorScheme.surfaceVariant
+    val track = MaterialTheme.colorScheme.outlineVariant
     val active = MaterialTheme.colorScheme.primary
     Box(modifier = modifier.testTag(tag), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
-            val stroke = Stroke(width = 16.dp.toPx(), cap = StrokeCap.Round)
-            val inset = stroke.width / 2 + 4.dp.toPx()
-            val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
-            val topLeft = Offset(inset, inset)
-            drawArc(
-                color = track,
-                startAngle = 0f,
-                sweepAngle = 360f,
-                useCenter = false,
-                topLeft = topLeft,
-                size = arcSize,
-                style = stroke,
-            )
-            if (progress > 0f) {
-                drawArc(
-                    color = active,
-                    startAngle = -90f,
-                    sweepAngle = 360f * progress.coerceIn(0f, 1f),
-                    useCenter = false,
-                    topLeft = topLeft,
-                    size = arcSize,
-                    style = stroke,
+            val radius = (min(size.width, size.height) - 12.dp.toPx()) / 2f
+            val tickLength = 14.dp.toPx()
+            val strokeWidth = 3.dp.toPx()
+            val litTicks = (litFraction.coerceIn(0f, 1f) * TICK_COUNT).roundToInt()
+            repeat(TICK_COUNT) { index ->
+                val angle = Math.toRadians(index * 360.0 / TICK_COUNT - 90.0)
+                val dx = cos(angle).toFloat()
+                val dy = sin(angle).toFloat()
+                drawLine(
+                    color = if (index < litTicks) active else track,
+                    start = Offset(
+                        center.x + dx * (radius - tickLength),
+                        center.y + dy * (radius - tickLength),
+                    ),
+                    end = Offset(
+                        center.x + dx * radius,
+                        center.y + dy * radius,
+                    ),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
                 )
             }
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(display, style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold)
-            Text(subtitle, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Text(display, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.SemiBold)
     }
 }
+
+private const val TICK_COUNT = 60
 
 @Composable
 private fun PomodoroControls(
-    session: com.voicetodo.domain.FocusSession?,
-    state: PomodoroUiState,
+    session: FocusSession?,
+    selectedPhase: FocusPhase,
+    busy: Boolean,
     vm: PomodoroViewModel,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         when {
-            session == null -> {
-                Button(
-                    onClick = { vm.onStart(FocusPhase.Focus) },
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("start_focus_button"),
-                ) { Text("开始专注", style = MaterialTheme.typography.titleMedium) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { vm.onStart(FocusPhase.ShortBreak) },
-                        enabled = !state.busy,
-                        modifier = Modifier.weight(1f).testTag("start_short_break_button"),
-                    ) { Text("短休息") }
-                    OutlinedButton(
-                        onClick = { vm.onStart(FocusPhase.LongBreak) },
-                        enabled = !state.busy,
-                        modifier = Modifier.weight(1f).testTag("start_long_break_button"),
-                    ) { Text("长休息") }
-                }
+            session == null -> PrimaryAction("开始", "start_button", !busy) {
+                vm.onStart(selectedPhase)
             }
             session.state == FocusSessionState.EndedPendingConfirmation -> {
-                Button(
-                    onClick = vm::onConfirmEnded,
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("confirm_ended_button"),
-                ) { Text("确认完成") }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { vm.onStart(FocusPhase.ShortBreak) },
-                        enabled = !state.busy,
-                        modifier = Modifier.weight(1f).testTag("start_short_break_button"),
-                    ) { Text("短休息") }
-                    OutlinedButton(
-                        onClick = { vm.onStart(FocusPhase.LongBreak) },
-                        enabled = !state.busy,
-                        modifier = Modifier.weight(1f).testTag("start_long_break_button"),
-                    ) { Text("长休息") }
-                }
+                PrimaryAction("确认完成", "confirm_ended_button", !busy, vm::onConfirmEnded)
             }
             session.state == FocusSessionState.Paused -> {
-                Button(
-                    onClick = { vm.onResume() },
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("resume_button"),
-                ) { Text("继续") }
-                TextButton(
-                    onClick = vm::onEndEarly,
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().testTag("end_early_button"),
-                ) { Text("提前结束") }
+                PrimaryAction("继续", "resume_button", !busy, vm::onResume)
+                SecondaryAction("提前结束", "end_early_button", !busy, vm::onEndEarly)
             }
             else -> {
-                Button(
-                    onClick = { vm.onPause() },
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("pause_button"),
-                ) { Text("暂停") }
-                TextButton(
-                    onClick = vm::onEndEarly,
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().testTag("end_early_button"),
-                ) { Text("提前结束") }
-            }
-        }
-
-        if (session == null) {
-            if (state.showItemPicker) {
-                ItemPicker(state.items, state.selectedItemId, state.busy, vm::onPickItem)
-            }
-            state.items.firstOrNull { it.id == state.selectedItemId }?.let {
-                Text("已绑定：${it.title}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("bound_item"))
+                PrimaryAction("暂停", "pause_button", !busy, vm::onPause)
+                SecondaryAction("提前结束", "end_early_button", !busy, vm::onEndEarly)
             }
         }
     }
 }
 
 @Composable
-private fun ItemPicker(
-    items: List<com.voicetodo.domain.TodoItem>,
-    selectedItemId: String?,
-    busy: Boolean,
-    onPickItem: (String?) -> Unit,
+private fun PrimaryAction(
+    text: String,
+    tag: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxWidth().testTag("item_picker"),
-        contentPadding = PaddingValues(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(50),
+        modifier = Modifier.width(160.dp).height(56.dp).testTag(tag),
     ) {
-        items(items.take(10), key = { it.id }) { item ->
-            FilterChip(
-                selected = selectedItemId == item.id,
-                onClick = { onPickItem(if (selectedItemId == item.id) null else item.id) },
-                enabled = !busy,
-                label = { Text(item.title) },
-                modifier = Modifier.testTag("focus_item_${item.id}"),
-            )
-        }
+        Text(text, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun SecondaryAction(
+    text: String,
+    tag: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.testTag(tag),
+    ) {
+        Text(text)
     }
 }
 
 @Composable
 private fun StopwatchControls(state: PomodoroUiState, vm: PomodoroViewModel) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         when {
             !state.stopwatchRunning && state.stopwatchResumedAt == null && state.stopwatchElapsedSeconds == 0L -> {
-                Button(
-                    onClick = vm::onStartStopwatch,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("start_stopwatch_button"),
-                ) { Text("开始", style = MaterialTheme.typography.titleMedium) }
+                PrimaryAction("开始", "start_stopwatch_button", onClick = vm::onStartStopwatch)
             }
             state.stopwatchRunning -> {
-                Button(
-                    onClick = vm::onPauseStopwatch,
-                    modifier = Modifier.fillMaxWidth().height(56.dp).testTag("pause_stopwatch_button"),
-                ) { Text("暂停") }
-                TextButton(
-                    onClick = vm::onResetStopwatch,
-                    modifier = Modifier.fillMaxWidth().testTag("reset_stopwatch_button"),
-                ) { Text("重置") }
+                PrimaryAction("暂停", "pause_stopwatch_button", onClick = vm::onPauseStopwatch)
+                SecondaryAction("重置", "reset_stopwatch_button", onClick = vm::onResetStopwatch)
             }
             else -> {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = vm::onStartStopwatch,
-                        modifier = Modifier.weight(1f).height(56.dp).testTag("resume_stopwatch_button"),
-                    ) { Text("继续") }
-                    OutlinedButton(
-                        onClick = vm::onResetStopwatch,
-                        modifier = Modifier.weight(1f).height(56.dp).testTag("reset_stopwatch_button"),
-                    ) { Text("重置") }
-                }
+                PrimaryAction("继续", "resume_stopwatch_button", onClick = vm::onStartStopwatch)
+                SecondaryAction("重置", "reset_stopwatch_button", onClick = vm::onResetStopwatch)
             }
         }
     }

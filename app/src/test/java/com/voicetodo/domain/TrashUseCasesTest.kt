@@ -115,7 +115,7 @@ class TrashUseCasesTest {
             val focusRepo = RoomFocusRepository(db)
             val focus = FocusUseCases(focusRepo, RecordedFocusScheduler(), clock, zone = zone)
             val item = useCases.confirmDraft("专注后删除", now.plus(Duration.ofHours(2))).item
-            focus.startFocus(itemId = item.id)
+            focus.startFocus()
             clock.instant = now.plus(Duration.ofMinutes(25))
             focus.reconcileEnd()
             focus.confirmEnded()

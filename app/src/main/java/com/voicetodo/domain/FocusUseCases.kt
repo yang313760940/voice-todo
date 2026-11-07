@@ -23,7 +23,6 @@ class FocusUseCases(
 
     suspend fun startFocus(
         phase: FocusPhase = FocusPhase.Focus,
-        itemId: String? = null,
         endCurrent: Boolean = false,
     ): FocusStartResult = mutations.withLock {
         val settings = repository.settings()
@@ -48,7 +47,6 @@ class FocusUseCases(
             endsAt = now.plusSeconds(duration),
             lastResumedAt = now,
             durationSeconds = duration,
-            itemId = itemId,
         )
         repository.save(session)
         scheduler.schedule(session.id, session.endsAt)

@@ -41,7 +41,7 @@ class FocusUseCasesTest {
         val item = TodoItem(id = "todo", title = "Work", createdAt = start)
         todos.save(item)
         useCases = FocusUseCases(repo, scheduler, clock, todos)
-        useCases.startFocus(itemId = item.id)
+        useCases.startFocus()
         clock.now = start.plusSeconds(1500)
         useCases.markEndedPendingConfirmation()
         val result = useCases.confirmEnded()!!
@@ -51,19 +51,16 @@ class FocusUseCasesTest {
         assertNull(todos.findById(item.id)!!.completedAt)
     }
 
-    @Test fun startingAnotherFocusEndsCurrentAndWarnsBeforeBindingTodo() = runTest {
-        val todos = InMemoryTodoRepository()
-        val item = TodoItem(id = "todo", title = "Work", createdAt = start)
-        todos.save(item)
-        useCases = FocusUseCases(repo, scheduler, clock, todos)
+    @Test fun startingAnotherFocusEndsCurrentOnlyWhenConfirmed() = runTest {
+        useCases = FocusUseCases(repo, scheduler, clock)
         useCases.startFocus()
-        val blocked = useCases.startFocus(itemId = item.id, endCurrent = false)
+        val blocked = useCases.startFocus(endCurrent = false)
         assertTrue(blocked.requiresEndingCurrent)
         assertEquals(start, blocked.session.startedAt)
 
-        val result = useCases.startFocus(itemId = item.id, endCurrent = true)
+        val result = useCases.startFocus(endCurrent = true)
         assertFalse(result.requiresEndingCurrent)
         assertEquals(start, result.previousEndedAt)
-        assertEquals(item.id, result.session.itemId)
+        assertNull(result.session.itemId)
     }
 }

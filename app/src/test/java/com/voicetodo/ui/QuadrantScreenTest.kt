@@ -1,6 +1,7 @@
 package com.voicetodo.ui
 
 import android.app.Application
+import android.os.Looper
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -17,13 +18,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
@@ -41,10 +41,12 @@ import com.voicetodo.domain.Quadrant
 import com.voicetodo.domain.RecordedScheduler
 import com.voicetodo.domain.TodoItem
 import com.voicetodo.domain.TodoUseCases
+import com.voicetodo.settings.QuadrantPreferencesStore
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.util.UUID
+import kotlin.math.abs
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -56,7 +58,6 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
-import android.os.Looper
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -69,6 +70,7 @@ class QuadrantScreenTest {
     private lateinit var repo: RoomTodoRepository
     private lateinit var useCases: TodoUseCases
     private lateinit var vm: TodoViewModel
+    private lateinit var preferencesStore: QuadrantPreferencesStore
     private var visibleVm by mutableStateOf<TodoViewModel?>(null)
     private val store = ViewModelStore()
     private val clock = FrozenClock(Instant.parse("2026-11-05T01:00:00Z"))
@@ -79,6 +81,8 @@ class QuadrantScreenTest {
         db = Room.inMemoryDatabaseBuilder(app, TodoDatabase::class.java).build()
         repo = RoomTodoRepository(db, FileTodoRepository(temp.newFolder(), ZoneId.of("Asia/Shanghai")))
         useCases = TodoUseCases(repo, scheduler, clock)
+        val preferences = app.getSharedPreferences("quadrant-test-${UUID.randomUUID()}", 0)
+        preferencesStore = QuadrantPreferencesStore(preferences)
     }
 
     @After fun tearDown() {
@@ -103,15 +107,17 @@ class QuadrantScreenTest {
         quadrant: Quadrant,
         dueAt: Instant? = null,
         createdAt: Instant = clock.now(),
-        suggestedQuadrant: Quadrant? = null,
+        note: String = "",
+        completedAt: Instant? = null,
     ): TodoItem {
         val item = TodoItem(
             id = UUID.randomUUID().toString(),
             title = title,
+            note = note,
             dueAt = dueAt,
             createdAt = createdAt,
+            completedAt = completedAt,
             quadrant = quadrant,
-            suggestedQuadrant = suggestedQuadrant,
         )
         runBlocking { repo.save(item) }
         return item
@@ -135,7 +141,7 @@ class QuadrantScreenTest {
                             key(current) {
                                 VoiceTodoNavigationHost(
                                     todoContent = { TodoScreen(current) },
-                                    quadrantContent = { QuadrantScreen(current) },
+                                    quadrantContent = { QuadrantScreen(current, preferencesStore) },
                                     pomodoroContent = { Text("番茄") },
                                     settingsContent = { Text("我的") },
                                 )
@@ -154,41 +160,23 @@ class QuadrantScreenTest {
     }
 
     @Test
-    fun menuMovePersistsAndSyncsWithTheTodoPage() {
-        val item = seed(
-            "菜单事项",
-            Quadrant.NotImportantNotUrgent,
-            dueAt = clock.now().plus(Duration.ofHours(2)),
-            suggestedQuadrant = Quadrant.ImportantUrgent,
-        )
+    fun clickingAnItemOpensExistingDetailWithTitleAndDescription() {
+        val item = seed("查看详情", Quadrant.ImportantUrgent, note = "准备材料")
         showApp()
 
         compose.onNodeWithTag("nav_quadrant").performClick()
-        compose.onNodeWithTag("quadrant_item_${item.id}").assertExists()
-        compose.onNodeWithTag("quadrant_value_${item.id}").assertTextEquals("当前：不重要不紧急")
-        compose.onNodeWithTag("quadrant_suggestion_${item.id}")
-            .assertTextEquals("AI 建议：重要且紧急（仅建议）")
+        compose.onNodeWithTag("quadrant_item_${item.id}").performClick()
+        waitFor { vm.state.value.detail?.original?.id == item.id }
 
-        compose.onNodeWithTag("move_menu_${item.id}").performScrollTo().performClick()
-        compose.onNodeWithTag("move_to_ImportantUrgent_${item.id}").performClick()
-        waitFor { vm.state.value.items.singleOrNull()?.quadrant == Quadrant.ImportantUrgent && !vm.state.value.busy }
-
-        assertEquals(
-            Quadrant.ImportantUrgent,
-            runBlocking { repo.findById(item.id) }!!.quadrant,
+        compose.onNodeWithTag("detail_title_field").assertTextEquals("标题", "查看详情")
+        compose.onNodeWithTag("detail_note_field").assertTextEquals(
+            "描述（可选，不进入提醒正文）",
+            "准备材料",
         )
-        compose.onNodeWithTag("quadrant_value_${item.id}").assertTextEquals("当前：重要且紧急")
-        compose.onNodeWithTag("quadrant_suggestion_${item.id}")
-            .assertTextEquals("AI 建议：重要且紧急（仅建议）")
-
-        compose.onNodeWithTag("nav_todo").performClick()
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
-        compose.onNodeWithTag("todo_quadrant_${item.id}", useUnmergedTree = true)
-            .assertTextEquals("象限：重要且紧急")
     }
 
     @Test
-    fun longPressDragMovesAcrossQuadrants() {
+    fun longPressDragMovesAcrossFixedQuadrants() {
         val item = seed("拖拽事项", Quadrant.NotImportantNotUrgent)
         showApp()
 
@@ -196,18 +184,91 @@ class QuadrantScreenTest {
         val start = compose.onNodeWithTag("quadrant_item_${item.id}").fetchSemanticsNode().boundsInRoot.center
         val target = compose.onNodeWithTag("quadrant_ImportantUrgent").fetchSemanticsNode().boundsInRoot.center
 
-        compose.onRoot().performTouchInput {
-            down(start)
+        val screenOrigin = compose.onNodeWithTag("quadrant_screen")
+            .fetchSemanticsNode().boundsInRoot.topLeft
+        compose.onNodeWithTag("quadrant_screen").performTouchInput {
+            down(start - screenOrigin)
             advanceEventTime(1_000)
             moveBy(Offset(8f, -8f))
             advanceEventTime(50)
-            moveTo(target)
+            moveTo(target - screenOrigin)
             advanceEventTime(50)
             up()
         }
 
         waitFor { vm.state.value.items.singleOrNull()?.quadrant == Quadrant.ImportantUrgent && !vm.state.value.busy }
         assertEquals(Quadrant.ImportantUrgent, runBlocking { repo.findById(item.id) }!!.quadrant)
+    }
+
+    @Test
+    fun allQuadrantsKeepEqualFixedHeightsWhenOneListIsLong() {
+        repeat(12) { seed("重要事项$it", Quadrant.ImportantUrgent) }
+        val other = seed("独立列表", Quadrant.ImportantNotUrgent)
+        showApp()
+
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        val topLeft = compose.onNodeWithTag("quadrant_ImportantUrgent").fetchSemanticsNode().boundsInRoot
+        val topRight = compose.onNodeWithTag("quadrant_ImportantNotUrgent").fetchSemanticsNode().boundsInRoot
+        val bottomLeft = compose.onNodeWithTag("quadrant_NotImportantUrgent").fetchSemanticsNode().boundsInRoot
+
+        assertTrue("同一行高度应一致", abs(topLeft.height - topRight.height) < 1f)
+        assertTrue("上下两行高度应一致", abs(topLeft.height - bottomLeft.height) < 1f)
+        val first = vm.state.value.items.first { it.title == "重要事项0" }
+        compose.onNodeWithTag("quadrant_list_ImportantUrgent")
+            .performScrollToNode(hasTestTag("quadrant_item_${first.id}"))
+        compose.onNodeWithTag("quadrant_item_${other.id}").assertIsDisplayed()
+    }
+
+    @Test
+    fun completedItemsAppearAtTheBottomAndCanBeRestored() {
+        val pending = seed("未完成", Quadrant.ImportantUrgent)
+        val completed = seed(
+            "已完成",
+            Quadrant.ImportantUrgent,
+            completedAt = clock.now().minus(Duration.ofMinutes(5)),
+        )
+        showApp()
+
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        compose.onNodeWithTag("quadrant_item_${completed.id}").assertDoesNotExist()
+        compose.onNodeWithTag("quadrant_more").performClick()
+        compose.onNodeWithTag("quadrant_toggle_completed").performClick()
+        compose.onNodeWithTag("quadrant_item_${completed.id}").assertIsDisplayed()
+
+        val pendingTop = compose.onNodeWithTag("quadrant_item_${pending.id}").fetchSemanticsNode().boundsInRoot.top
+        val completedTop = compose.onNodeWithTag("quadrant_item_${completed.id}").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("已完成事项应排在未完成事项之后", pendingTop < completedTop)
+        compose.onNodeWithTag("quadrant_complete_${completed.id}").performClick()
+        waitFor { vm.state.value.items.any { it.id == completed.id } }
+        assertEquals(null, runBlocking { repo.findById(completed.id) }!!.completedAt)
+    }
+
+    @Test
+    fun layoutEditSwapsQuadrantsAndPersistsTheOrder() {
+        showApp()
+
+        compose.onNodeWithTag("nav_quadrant").performClick()
+        compose.onNodeWithTag("quadrant_more").performClick()
+        compose.onNodeWithTag("quadrant_edit_layout").performClick()
+        val start = compose.onNodeWithTag("quadrant_ImportantUrgent").fetchSemanticsNode().boundsInRoot.center
+        val target = compose.onNodeWithTag("quadrant_NotImportantNotUrgent").fetchSemanticsNode().boundsInRoot.center
+
+        val screenOrigin = compose.onNodeWithTag("quadrant_screen")
+            .fetchSemanticsNode().boundsInRoot.topLeft
+        compose.onNodeWithTag("quadrant_screen").performTouchInput {
+            down(start - screenOrigin)
+            advanceEventTime(1_000)
+            moveBy(Offset(8f, 8f))
+            advanceEventTime(50)
+            moveTo(target - screenOrigin)
+            advanceEventTime(50)
+            up()
+        }
+
+        compose.waitUntil(5_000) {
+            preferencesStore.load().order.first() == Quadrant.NotImportantNotUrgent
+        }
+        assertEquals(Quadrant.ImportantUrgent, preferencesStore.load().order.last())
     }
 
     @Test
@@ -235,37 +296,17 @@ class QuadrantScreenTest {
         }
         assertTrue("逾期应排在临近之前", tops[0] < tops[1])
         assertTrue("临近应排在普通之前", tops[1] < tops[2])
-        compose.onNodeWithTag("quadrant_overdue_${overdue.id}").assertExists()
-        compose.onNodeWithTag("quadrant_near_due_${near.id}").assertExists()
     }
 
     @Test
-    fun nearDeadlineDoesNotAutoMigrateQuadrant() {
-        val item = seed(
-            "即将到期",
-            Quadrant.NotImportantNotUrgent,
-            dueAt = clock.now().plus(Duration.ofMinutes(30)),
-        )
-        showApp()
-
-        compose.onNodeWithTag("nav_quadrant").performClick()
-        compose.onNodeWithTag("quadrant_near_due_${item.id}").assertExists()
-        compose.onNodeWithTag("quadrant_value_${item.id}").assertTextEquals("当前：不重要不紧急")
-        assertEquals(Quadrant.NotImportantNotUrgent, runBlocking { repo.findById(item.id) }!!.quadrant)
-    }
-
-    @Test
-    fun darkThemeLargeFontAndLandscapeStillExposeTheMenuMove() {
-        val item = seed("无障碍事项", Quadrant.NotImportantNotUrgent)
+    fun darkThemeLargeFontAndLandscapeStillExposeTheGuide() {
         showApp(dark = true, fontScale = 1.5f, wideLandscape = true)
 
         compose.onNodeWithTag("nav_quadrant").performClick()
-        compose.onNodeWithTag("quadrant_screen").assertExists()
-        compose.onNodeWithTag("move_menu_${item.id}").performScrollTo().performClick()
-        compose.onNodeWithTag("move_to_NotImportantUrgent_${item.id}").performClick()
-
-        waitFor { vm.state.value.items.singleOrNull()?.quadrant == Quadrant.NotImportantUrgent && !vm.state.value.busy }
-        assertEquals(Quadrant.NotImportantUrgent, runBlocking { repo.findById(item.id) }!!.quadrant)
+        compose.onNodeWithTag("quadrant_screen").assertIsDisplayed()
+        compose.onNodeWithTag("quadrant_more").performClick()
+        compose.onNodeWithTag("quadrant_open_guide").performClick()
+        compose.onNodeWithTag("quadrant_guide").assertIsDisplayed()
     }
 
     private fun waitFor(condition: () -> Boolean) {
@@ -274,8 +315,8 @@ class QuadrantScreenTest {
                 shadowOf(Looper.getMainLooper()).idle()
                 condition()
             }
-        } catch (e: Exception) {
-            throw AssertionError("UI state at timeout: ${vm.state.value}", e)
+        } catch (error: Exception) {
+            throw AssertionError("UI state at timeout: ${vm.state.value}", error)
         }
     }
 }

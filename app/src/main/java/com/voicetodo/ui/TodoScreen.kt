@@ -1133,7 +1133,7 @@ private fun SpeechCaptureCard(vm: TodoViewModel, state: UiState, enabled: Boolea
 }
 
 @Composable
-private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft, enabled: Boolean) {
+internal fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft, enabled: Boolean) {
     val context = LocalContext.current
     val original = detail.original
     val editable = enabled && original?.completedAt == null
@@ -1170,7 +1170,7 @@ private fun DetailScreen(vm: TodoViewModel, state: UiState, detail: DetailDraft,
         }
         item {
             OutlinedTextField(value = detail.note, onValueChange = vm::onDetailNoteChange,
-                label = { Text("备注（可选，不进入提醒正文）") }, enabled = editable,
+                label = { Text("描述（可选，不进入提醒正文）") }, enabled = editable,
                 minLines = 2, modifier = Modifier.fillMaxWidth().testTag("detail_note_field"))
         }
         if (original == null) {

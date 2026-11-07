@@ -102,6 +102,7 @@ fun PomodoroScreen(vm: PomodoroViewModel) {
                     enabled = session == null,
                     showChevron = session == null,
                     onSelect = vm::onSelectPhase,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
                 Spacer(Modifier.height(8.dp))
                 TimeRing(
@@ -114,7 +115,13 @@ fun PomodoroScreen(vm: PomodoroViewModel) {
             }
             TimerMode.Stopwatch -> {
                 val elapsed = vm.stopwatchSeconds(now)
-                PhaseHeader(label = "正计时", enabled = false, showChevron = false, onSelect = {})
+                PhaseHeader(
+                    label = "正计时",
+                    enabled = false,
+                    showChevron = false,
+                    onSelect = {},
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                )
                 Spacer(Modifier.height(8.dp))
                 TimeRing(
                     litFraction = ((elapsed % 3600).toFloat() / 3600f).coerceIn(0f, 1f),
@@ -241,9 +248,10 @@ private fun PhaseHeader(
     enabled: Boolean,
     showChevron: Boolean,
     onSelect: (FocusPhase) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>速查 · 百炼真机配置</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+  <p class="lesson-kicker">Reference · 2026-11-07 核对</p>
+  <h1>百炼接入：一页速查</h1>
+  <p class="subtitle">适用于本 App 当前的阿里云设置界面；不收集或保存密钥。</p>
+  <h2 id="key">获取</h2>
+  <p><a href="https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key">百炼控制台 API Key 页面</a> → <strong>华北2（北京）</strong> → 创建 API Key → 自己的账号、默认业务空间 → 复制。</p>
+  <p>需要<strong>百炼 API Key</strong>，不是登录密码，也不是 AccessKey ID / Secret。Key、接口地域与模型权限须匹配；一把拥有对应权限的 Key 可以访问转写与整理两个模型。</p>
+  <h2 id="phone">手机填写</h2>
+  <p><strong>我的 → 语音与 AI → 语音与 AI 设置</strong></p>
+  <table>
+    <thead><tr><th scope="col">字段</th><th scope="col">内容</th></tr></thead>
+    <tbody>
+      <tr><td>供应商 / 语言</td><td>阿里云 / 普通话</td></tr>
+      <tr><td>百炼 API Key</td><td>自己的真实密钥，只在手机设置里粘贴</td></tr>
+      <tr><td>百炼文本模型</td><td><code>qwen-plus</code></td></tr>
+      <tr><td>保存按钮</td><td>保存语音与 AI 配置</td></tr>
+    </tbody>
+  </table>
+  <p>语音模型由此版默认使用 <code>qwen3-asr-flash-realtime</code>，服务地址无需在界面中填写。“旧配置”不参与语音添加。</p>
+  <h2 id="proof">验收</h2>
+  <p>联网 → 麦克风 → 阅读上传提示 → 说“明天下午三点提醒我买牛奶” → 结束 → 检查转写、标题、提醒时间。想检查草稿时，点击倒计时取消自动保存。</p>
+  <p><strong>已配置 ≠ 调用成功。</strong>转写与整理都得到正确结果，才验证了两段服务。</p>
+  <h2 id="security">安全与费用</h2>
+  <p>不要发送、截图或提交 Key；使用独立测试 Key 并限制权限。调用可能收费，请先查看额度和账单。手机端长期 Key 仍有风险，官方推荐客户端使用临时 Key；测试后可删除测试专用 Key。</p>
+  <footer class="lesson-footer">
+    <p><a href="../lessons/0006-aliyun-api-key.html">完整操作课</a> · <a href="glossary.html#api-key">术语解释</a> · <a href="https://help.aliyun.com/zh/model-studio/get-api-key">官方获取 Key 指南</a></p>
+    <div class="ask">遇到错误，告诉老师出错步骤和文字；不要发送密钥。</div>
+  </footer>
+</body>
+</html>

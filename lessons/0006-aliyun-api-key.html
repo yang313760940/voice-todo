@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 6 课 · 获取百炼密钥，完成一次真机语音测试</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+  <p class="lesson-kicker">Lesson 06 · 2026-11-07 核对</p>
+  <h1>让手机接上阿里云百炼</h1>
+  <p class="subtitle">一个小胜利：自己获取密钥、填入设置，并用一句话验证云端链路。</p>
+  <p>这一课属于“AI 写代码，我做决策与验收”：不改代码、不重装 APK，由你完成账号授权与真机测试。步骤可随时暂停。</p>
+
+  <div class="callout warn">
+    <span class="label">先保护密钥</span>
+    <strong>不要把 API Key 发到聊天、截图、课程文件或 GitHub。</strong>
+    只在百炼控制台复制，再粘贴到自己的手机应用。课程不收集、不保存密钥。
+    调用可能产生费用，先查看控制台额度与账单规则，不必为了完成本课购买订阅。
+  </div>
+
+  <h2 id="concept">先懂一句话</h2>
+  <p><a href="../reference/glossary.html#api-key">API Key（接口密钥）</a>是 App 调用云服务时出示的秘密凭证，类似专用通行证，不是登录密码。这里要的是<strong>阿里云百炼 API Key</strong>，不是 AccessKey ID / AccessKey Secret。</p>
+  <p>本 App 的链路是：录音 → 语音转写 → 文字整理 → 事项草稿。阿里云供应商使用同一把百炼 Key 访问两种模型，前提是该 Key 拥有对应模型权限。</p>
+
+  <h2 id="create">一 · 获取正确的 Key</h2>
+  <ol class="steps">
+    <li>在手机浏览器打开<a href="https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key">百炼 API Key 页面</a>并登录。手机操作便于稍后直接复制到 App；网页难操作时可在电脑上完成。登录验证码、实名认证与服务开通由你本人处理。</li>
+    <li>检查地域是<strong>华北2（北京）</strong>。本 APK 默认使用北京接口；不要选新加坡或美国。地域是服务接入区域，不是手机所在地。</li>
+    <li>点<strong>创建 API Key</strong>。个人初次使用：归属账号选自己的主账号，归属业务空间选<strong>默认业务空间</strong>。若有权限选项，测试专用 Key 可限制为本课的两个模型；若界面不便设置，官方流程允许“全部”，但不要将这把 Key 分享给别人。</li>
+    <li>确认创建后使用复制按钮。只复制完整密钥，不加引号，不在前后附带空格；不要手抄，也不要把示例文本当作真实密钥。</li>
+  </ol>
+  <p>依据：<a href="https://help.aliyun.com/zh/model-studio/get-api-key">阿里云官方获取与配置 API Key</a>。若你看到的界面不同，停在当前步骤，告诉老师页面文字；发截图前必须遮住密钥。</p>
+
+  <div class="quiz" data-quiz>
+    <p class="q">App 的“百炼 API Key”应该填什么？</p>
+    <button class="opt" data-correct="false" data-why="账号密码用于登录网页，不用于 App 的百炼接口。">账号登录密码</button>
+    <button class="opt" data-correct="true" data-why="使用百炼控制台创建的 API Key，不是登录密码或云资源 AccessKey。">百炼接口密钥</button>
+    <button class="opt" data-correct="false" data-why="云资源 AccessKey 与百炼 API Key 不是同一种凭证。">云资源访问键</button>
+    <p class="feedback" aria-live="polite"></p>
+  </div>
+
+  <h2 id="configure">二 · 填入小米 12X 上的 App</h2>
+  <p>路径：<strong>我的 → 语音与 AI → 语音与 AI 设置</strong>。</p>
+  <table>
+    <thead><tr><th scope="col">设置项</th><th scope="col">填写内容</th></tr></thead>
+    <tbody>
+      <tr><td>供应商</td><td>阿里云</td></tr>
+      <tr><td>识别语言</td><td>普通话</td></tr>
+      <tr><td>百炼 API Key</td><td>你刚复制的真实密钥，由你自己粘贴</td></tr>
+      <tr><td>百炼文本模型</td><td><code>qwen-plus</code>（保留默认值）</td></tr>
+    </tbody>
+  </table>
+  <ol class="steps">
+    <li>选“阿里云”，再选“普通话”。</li>
+    <li>把密钥粘贴进“百炼 API Key”；文本模型保留 <code>qwen-plus</code>。</li>
+    <li>点<strong>保存语音与 AI 配置</strong>，确认出现配置已保存的提示，以及“语音识别：已配置”“事项整理：已配置”。</li>
+  </ol>
+  <p>这版不需要你填服务地址或语音模型；实时识别默认使用 <code>qwen3-asr-flash-realtime</code>。不要把配置填进下方“旧配置（仅查看，不参与语音添加）”。</p>
+  <div class="callout">
+    <span class="label">安全边界</span>
+    保存到自己手机的设置，不等于把密钥写进 APK 源码。
+    但手机端长期密钥仍有泄露风险：<a href="https://help.aliyun.com/zh/model-studio/get-api-key">阿里云建议客户端避免使用长期 Key</a>。
+    本课仅针对你自己的测试手机，优先使用独立测试 Key、限制模型权限，测试结束后可在控制台删除这把 Key。
+  </div>
+
+  <h2 id="test">三 · 验收，不只看“已配置”</h2>
+  <ol class="steps">
+    <li>手机保持联网，回到待办页面，点击底部麦克风。</li>
+    <li>若出现麦克风权限或“录音和文字将上传到阿里云”提示，阅读后由你决定是否允许；接受上传时点“同意并开始”。不要用真实隐私内容测试。</li>
+    <li>说：“明天下午三点提醒我买牛奶。”然后结束录音。</li>
+    <li>检查两个结果：① 转写文字大意正确；② 草稿标题与提醒时间正确。若想先检查，点倒计时取消自动保存；检查后手动确认。正常不操作时，这版会在倒计时结束后自动保存。</li>
+  </ol>
+  <p>只有“说话能转写、文字能整理”的实际结果，才验证了两段云服务。配置已保存只说明本地接受了输入，不证明密钥有效或有额度。</p>
+  <div class="quiz" data-quiz>
+    <p class="q">哪种证据能检验 Key 是否真的可用？</p>
+    <button class="opt" data-correct="true" data-why="一次真实录音加整理结果，才测试了网络、权限、模型与密钥；还需核对事项内容。">实际录音成功</button>
+    <button class="opt" data-correct="false" data-why="本地保存成功不代表远端鉴权成功。">配置保存成功</button>
+    <button class="opt" data-correct="false" data-why="看到设置项不能证明服务调用可用。">设置界面打开</button>
+    <p class="feedback" aria-live="polite"></p>
+  </div>
+
+  <h2 id="trouble">卡住时，只报告现象</h2>
+  <p>找不到创建按钮：检查是否登录正确账号，以及是否有管理权限。鉴权失败：核对北京地域、完整 Key 与模型权限。额度或欠费提示：查看控制台，不要反复充值试错。转写成功但整理失败：分别报告两个阶段，不要把它们当作同一个故障。</p>
+  <p>这些是排查方向，不是对你手机的诊断结论。告诉老师错误文字与发生步骤即可，<strong>不要发送密钥</strong>。</p>
+
+  <footer class="lesson-footer">
+    <h3>以后忘了，看这张卡</h3>
+    <p><a href="../reference/aliyun-setup-checklist.html">百炼真机配置速查</a> · <a href="../reference/glossary.html#api-key">术语速查</a> · <a href="0005-spec-vs-ticket.html">上一课：规格与实施票</a></p>
+    <h3>首选原始资料</h3>
+    <p><a href="https://help.aliyun.com/zh/model-studio/get-api-key">官方获取 API Key 指南</a>；协议与默认模型见<a href="https://help.aliyun.com/en/model-studio/qwen-asr-realtime-java-sdk">官方 Qwen-ASR-Realtime 文档</a>。页面改版时，以官方页面为准。</p>
+    <p>下次回来，先不看答案，回忆：为什么选北京？“保存成功”和“语音识别成功”有什么不同？</p>
+    <div class="ask">随时问老师。你现在完成到哪一步、看到什么提示？只发步骤与提示，不发密钥。尚未验证成功前，不会记录为“已经学会”。</div>
+  </footer>
+</body>
+</html>

@@ -36,3 +36,9 @@
 - [r/androiddev](https://www.reddit.com/r/androiddev/) — 中高信任。安卓开发者社区，适合问「这样设计对不对」。
 - [Stack Overflow](https://stackoverflow.com/) — 高信任（答案质量需自辨）。具体报错、具体 API 问题。
 - [Matt Pocock Discord（AI Hero）](https://www.aihero.dev/) — 高信任。作者社区，适合问工具链用法。
+
+## 阿里云百炼 / 真机配置（2026-11-07 核对）
+
+- [阿里云官方 — 获取与配置 API Key](https://help.aliyun.com/zh/model-studio/get-api-key) — 高信任。创建入口、地域与权限隔离、密钥安全；用于首次配置手机上的百炼供应商。
+- [阿里云官方 — Qwen-ASR-Realtime Java SDK](https://help.aliyun.com/en/model-studio/qwen-asr-realtime-java-sdk) — 高信任。核对 `qwen3-asr-flash-realtime`、北京接入地址与旧域名兼容性；不要与 Fun-ASR 的协议混用。
+- 本仓库 `app/src/main/java/com/voicetodo/ui/AiScreens.kt` 与 `speech/VoiceServiceSettings.kt` — 当前 App 的设置项与默认模型的直接依据；不代表真服务已验证。教学操作卡见 `lessons/0006-aliyun-api-key.html`。

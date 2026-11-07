@@ -36,6 +36,8 @@
   <a href="#domain">术语表 GLOSSARY</a>
   <a href="#grill">grilling（拷问）</a>
   <a href="#commit">commit（提交）</a>
+  <a href="#api-key">API Key（接口密钥）</a>
+  <a href="#model-region">模型与地域</a>
 </div>
 
 <h2 id="loop">五步循环</h2>
@@ -85,6 +87,14 @@
 <h2 id="commit">commit（提交）</h2>
 <dl class="term"><dt>commit<span class="en">commit</span></dt>
 <dd>把当前改动<strong>打一个快照</strong>存进 Git 历史，附带一句说明。像游戏存档：以后能回退到这一刻。一次有意义的改动对应一次 commit。</dd></dl>
+
+<h2 id="api-key">API Key（接口密钥）</h2>
+<dl class="term"><dt>API Key<span class="en">接口密钥</span></dt>
+<dd>应用调用云服务时出示的秘密凭证；别人拿到它，可能用你的账号消耗额度。<strong>它不是阿里云登录密码，也不是管理云资源的 AccessKey ID / Secret。</strong><span class="app">本 App 的阿里云供应商使用百炼 API Key，实时转写与文字整理共用一把。</span>（见 <a href="../lessons/0006-aliyun-api-key.html">第 6 课</a>与<a href="https://help.aliyun.com/zh/model-studio/get-api-key">官方说明</a>）</dd></dl>
+
+<h2 id="model-region">模型与地域</h2>
+<dl class="term"><dt>模型 / 地域<span class="en">model / region</span></dt>
+<dd>模型是完成某种任务的云端能力；地域是服务接入区域，不是手机所在地。<span class="app">这版 App 用 <code>qwen3-asr-flash-realtime</code> 转写，用 <code>qwen-plus</code> 整理；默认连接北京接口，所以应获取北京地域的 Key。</span>不同地域的 Key 与接入地址不能混用。见<a href="https://help.aliyun.com/zh/model-studio/get-api-key">官方地域说明</a>。</dd></dl>
 
 <div class="lesson-footer">
   <div class="ask">

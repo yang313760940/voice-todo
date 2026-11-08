@@ -3,6 +3,7 @@ package com.voicetodo.ui
 import android.app.Application
 import android.os.Looper
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.voicetodo.alarm.ReminderCapabilities
@@ -79,7 +81,21 @@ class TodoHomeTest {
                     zoneId = zone,
                 ) as T
         })[TodoViewModel::class.java]
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.setContent {
+            MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { },
+                    pomodoroContent = { },
+                    settingsContent = { },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
+                )
+            }
+        }
         waitFor { !vm.state.value.loading }
     }
 
@@ -120,7 +136,7 @@ class TodoHomeTest {
         compose.runOnIdle { vm.onRefresh() }
         waitFor { vm.state.value.items.size == 3 }
 
-        compose.onNodeWithTag("view_title").assertTextEquals("今天")
+        compose.onNodeWithTag("view_title", useUnmergedTree = true).assertTextEquals("今天")
         compose.onAllNodesWithText("重复来源").assertCountEquals(1)
         compose.onNodeWithText("逾期事项").assertExists()
         compose.onNodeWithText("后天事项").assertDoesNotExist()
@@ -222,7 +238,7 @@ class TodoHomeTest {
 
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
         compose.onNodeWithText("跨视图同步").assertExists()
-        compose.onNodeWithTag("open_${item.id}").performClick()
+        compose.onNodeWithTag("item_row_0").performClick()
         waitFor { vm.state.value.detail?.original?.id == item.id }
         compose.onNodeWithTag("detail_screen").performScrollToNode(hasTestTag("detail_list_selector"))
         compose.onNodeWithTag("detail_list_selector").performClick()

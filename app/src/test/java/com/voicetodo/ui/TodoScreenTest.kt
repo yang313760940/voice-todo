@@ -101,7 +101,7 @@ class TodoScreenTest {
         }
         compose.waitForIdle()
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag(if (completed) "completed_row_0" else "item_row_0"))
-        compose.onNodeWithTag("open_${item.id}").performClick()
+        compose.onNodeWithTag(if (completed) "completed_row_0" else "item_row_0").performClick()
         waitFor { vm.state.value.detail?.original?.id == item.id && !vm.state.value.busy }
     }
 
@@ -236,16 +236,20 @@ class TodoScreenTest {
         compose.runOnIdle { vm.onRefresh() }
         waitFor { item.id in vm.state.value.deliveredIds }
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
-        compose.onNodeWithTag("delivered_${item.id}", useUnmergedTree = true).assertTextEquals("已提醒")
-        compose.onNodeWithTag("overdue_${item.id}", useUnmergedTree = true).assertTextEquals("逾期")
+        compose.onNodeWithTag("summary_${item.id}", useUnmergedTree = true)
+            .assertTextContains("已提醒", substring = true)
+        compose.onNodeWithTag("summary_${item.id}", useUnmergedTree = true)
+            .assertTextContains("已逾期", substring = true)
         open(item)
         detailClick("clear_dueAt")
         replaceDetail("detail_reminder_value_0", "2026-11-05 18:15")
         saveDetail()
         Assert.assertTrue(vm.state.value.deliveredIds.isEmpty())
         compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
-        compose.onNodeWithTag("delivered_${item.id}", useUnmergedTree = true).assertDoesNotExist()
-        compose.onNodeWithTag("overdue_${item.id}", useUnmergedTree = true).assertDoesNotExist()
+        val summaryText = compose.onNodeWithTag("summary_${item.id}", useUnmergedTree = true)
+            .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+        Assert.assertFalse(summaryText.contains("已逾期"))
+        Assert.assertFalse(summaryText.contains("已提醒"))
     }
 
     @Test fun missedReminderSummaryShowsOriginalTimeAndOffersCompleteOrReschedule() {
@@ -417,13 +421,15 @@ class TodoScreenTest {
             saved.reminders.map { it.at to it.beforeDue },
         )
         Assert.assertTrue(saved.reminders.all { it.outcome == ReminderOutcome.NotReady })
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("retry_reminders_${item.id}"))
-        compose.onNodeWithTag("retry_reminders_${item.id}").assertIsDisplayed()
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
+        compose.onNodeWithTag("more_${item.id}").performClick()
+        compose.onNodeWithTag("info_retry_reminders").assertIsDisplayed()
 
         scheduler.scheduleSucceeds = true
-        compose.onNodeWithTag("retry_reminders_${item.id}").performClick()
+        compose.onNodeWithTag("info_retry_reminders").performClick()
         waitFor { vm.state.value.items.single().reminders.all { it.outcome == ReminderOutcome.Scheduled } }
         compose.onNodeWithTag("message").assertTextEquals("已保存并安排提醒")
+        compose.onNodeWithTag("info_sheet_close").performClick()
 
         open(item)
         detailClick("remove_reminder_1")
@@ -454,8 +460,7 @@ class TodoScreenTest {
         Assert.assertEquals(1, instances.map { it.seriesId }.distinct().size)
         Assert.assertNotNull(instances.first().seriesId)
         Assert.assertTrue(vm.state.value.seriesLabels.containsKey(instances.first().seriesId))
-        compose.onNodeWithTag("recurrence_${instances.first().id}", useUnmergedTree = true)
-            .assertTextContains("每天", substring = true)
+        Assert.assertTrue(vm.state.value.seriesLabels[instances.first().seriesId].orEmpty().contains("每天"))
 
         compose.runOnIdle { store.clear(); vm = makeViewModel(); visibleVm = vm }
         waitFor { vm.state.value.items.size == 2 && !vm.state.value.loading }
@@ -534,8 +539,9 @@ class TodoScreenTest {
         val first = vm.state.value.items.filter { it.seriesId == series.id }
             .minBy { it.occurrenceDate!! }
 
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("delete_${first.id}"))
-        compose.onNodeWithTag("delete_${first.id}").performClick()
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
+        compose.onNodeWithTag("more_${first.id}").performClick()
+        compose.onNodeWithTag("info_delete").performClick()
         compose.onNodeWithTag("delete_scope_dialog").assertIsDisplayed()
         compose.onNodeWithTag("delete_scope_this").performClick()
         waitFor { vm.state.value.items.none { it.id == first.id } && !vm.state.value.busy }
@@ -555,8 +561,9 @@ class TodoScreenTest {
         val first = vm.state.value.items.filter { it.seriesId == series.id }
             .minBy { it.occurrenceDate!! }
 
-        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("delete_${first.id}"))
-        compose.onNodeWithTag("delete_${first.id}").performClick()
+        compose.onNodeWithTag("todo_list").performScrollToNode(hasTestTag("item_row_0"))
+        compose.onNodeWithTag("more_${first.id}").performClick()
+        compose.onNodeWithTag("info_delete").performClick()
         compose.onNodeWithTag("delete_scope_future").performClick()
         waitFor { vm.state.value.items.none { it.seriesId == series.id } && !vm.state.value.busy }
 

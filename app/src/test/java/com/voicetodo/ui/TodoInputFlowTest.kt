@@ -3,6 +3,7 @@ package com.voicetodo.ui
 import android.app.Application
 import android.os.Looper
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
@@ -14,6 +15,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.voicetodo.alarm.ReminderCapabilities
@@ -68,7 +70,21 @@ class TodoInputFlowTest {
                     zoneId = ZoneId.of("Asia/Shanghai"),
                 ) as T
         })[TodoViewModel::class.java]
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.setContent {
+            MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { },
+                    pomodoroContent = { },
+                    settingsContent = { },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
+                )
+            }
+        }
         waitFor { !vm.state.value.loading }
         compose.runOnIdle { vm.onOpenAdd() }
         waitFor { vm.state.value.addOpen }

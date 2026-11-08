@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Looper
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.voicetodo.ai.AiDraft
@@ -206,7 +208,21 @@ class SpeechCaptureFlowTest {
     @Test
     fun `unconfigured voice panel still allows pencil text and saving to inbox`() {
         settingsStore.settings = null
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.setContent {
+            MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { },
+                    pomodoroContent = { },
+                    settingsContent = { },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
+                )
+            }
+        }
 
         compose.onNodeWithTag("voice_mic_button").performClick()
         waitFor { vm.state.value.addOpen && vm.state.value.voicePanelOpen }
@@ -227,7 +243,21 @@ class SpeechCaptureFlowTest {
     @Test
     fun `unconfigured voice panel can open settings and return to the panel`() {
         settingsStore.settings = null
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.setContent {
+            MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { },
+                    pomodoroContent = { },
+                    settingsContent = { },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
+                )
+            }
+        }
 
         compose.onNodeWithTag("voice_mic_button").performClick()
         waitFor { vm.state.value.addOpen && vm.state.value.voicePanelOpen }
@@ -494,11 +524,16 @@ class SpeechCaptureFlowTest {
         settingsStore.settings = configured()
         compose.setContent {
             MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
                 VoiceTodoNavigationHost(
                     todoContent = { TodoScreen(vm) },
                     quadrantContent = { Text("四象限页") },
                     pomodoroContent = { Text("番茄页") },
                     settingsContent = { Text("我的页") },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
                 )
             }
         }
@@ -521,7 +556,21 @@ class SpeechCaptureFlowTest {
 
     @Test
     fun `long press microphone opens the full manual form`() {
-        compose.setContent { MaterialTheme { TodoScreen(vm) } }
+        compose.setContent {
+            MaterialTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                VoiceTodoNavigationHost(
+                    todoContent = { TodoScreen(vm) },
+                    quadrantContent = { },
+                    pomodoroContent = { },
+                    settingsContent = { },
+                    onVoiceClick = { vm.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { vm.onOpenFullManualForm() },
+                    showVoice = state.aiSettingsForm == null && state.aiDraft == null &&
+                        state.detail == null && !state.addOpen,
+                )
+            }
+        }
 
         compose.onNodeWithTag("voice_mic_button").performTouchInput { longClick() }
         waitFor { vm.state.value.detail != null }

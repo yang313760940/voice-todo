@@ -7,7 +7,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,22 +21,34 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -48,12 +63,14 @@ import com.voicetodo.domain.MissedReminder
 import com.voicetodo.domain.RecurrenceFrequency
 import com.voicetodo.domain.RecurrenceRule
 import com.voicetodo.domain.RecurringDeleteScope
+import com.voicetodo.domain.TodoReminder
 import com.voicetodo.domain.isOverdue
 import com.voicetodo.domain.buildDisplayGroups
 import com.voicetodo.domain.itemsForView
 import com.voicetodo.domain.supportsUnscheduledFilter
 import com.voicetodo.speech.VoiceProvider
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -99,6 +116,7 @@ fun TodoScreen(vm: TodoViewModel) {
     val aiSettingsForm = state.aiSettingsForm
     val aiDraft = state.aiDraft
     val detail = state.detail
+    var infoItemId by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize()) {
         when {
             aiSettingsForm != null -> AiSettingsScreen(vm, state, aiSettingsForm)
@@ -106,7 +124,7 @@ fun TodoScreen(vm: TodoViewModel) {
             detail != null -> DetailScreen(vm, state, detail, enabled)
             state.addOpen && !state.voicePanelOpen -> AddTodoScreen(vm, state, enabled)
             else -> {
-                TodoHomeScreen(vm, state, enabled)
+                TodoHomeScreen(vm, state, enabled, onOpenInfo = { infoItemId = it })
                 if (state.voicePanelOpen) VoiceCapturePanel(vm, state, enabled)
             }
         }
@@ -174,10 +192,33 @@ fun TodoScreen(vm: TodoViewModel) {
             SpeechConsentDialog(vm, state.voiceProvider?.label ?: "豆包")
         }
     }
+    val infoItem = (state.items + state.completedItems).firstOrNull { it.id == infoItemId }
+    if (infoItem != null) {
+        ItemInfoSheet(
+            item = infoItem,
+            state = state,
+            zone = vm.zoneId,
+            onDismiss = { infoItemId = null },
+            onOpenDetail = {
+                infoItemId = null
+                vm.onOpenDetail(infoItem.id)
+            },
+            onDelete = {
+                infoItemId = null
+                vm.onDelete(infoItem.id)
+            },
+            onRetryReminders = { vm.onRetryReminders(infoItem.id) },
+        )
+    }
 }
 
 @Composable
-private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) {
+private fun TodoHomeScreen(
+    vm: TodoViewModel,
+    state: UiState,
+    enabled: Boolean,
+    onOpenInfo: (String) -> Unit,
+) {
     val visible = itemsForView(
         state.items + state.completedItems,
         state.selectedView,
@@ -194,127 +235,154 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("todo_list"),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize().testTag("todo_list"),
+            contentPadding = PaddingValues(bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.testTag("view_title"))
+            Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    modifier = Modifier
+                        .clickable { viewMenuOpen = true }
+                        .testTag("view_selector"),
+                ) {
                     Text(
-                        if (state.selectedView == TodoView.Today) {
-                            today.format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA))
-                        } else "${visible.size} 项",
+                        title,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.testTag("view_title"),
+                    )
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = "切换视图",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 3.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${visible.size} 项",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
-                Box {
-                    TextButton(onClick = { viewMenuOpen = true },
-                        modifier = Modifier.testTag("view_selector")) {
-                        Text("切换视图")
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                DropdownMenu(
+                    expanded = viewMenuOpen,
+                    onDismissRequest = { viewMenuOpen = false },
+                    modifier = Modifier.testTag("view_menu"),
+                ) {
+                    ViewMenuItem("今天", "view_today", state.selectedView == TodoView.Today) {
+                        vm.onSelectView(TodoView.Today); viewMenuOpen = false
                     }
-                    DropdownMenu(
-                        expanded = viewMenuOpen,
-                        onDismissRequest = { viewMenuOpen = false },
-                        modifier = Modifier.testTag("view_menu"),
-                    ) {
-                        ViewMenuItem("今天", "view_today", state.selectedView == TodoView.Today) {
-                            vm.onSelectView(TodoView.Today); viewMenuOpen = false
-                        }
-                        ViewMenuItem("收集箱", "view_inbox", state.selectedView == TodoView.Inbox) {
-                            vm.onSelectView(TodoView.Inbox); viewMenuOpen = false
-                        }
-                        ViewMenuItem("最近七天", "view_recent7", state.selectedView == TodoView.RecentSevenDays) {
-                            vm.onSelectView(TodoView.RecentSevenDays); viewMenuOpen = false
-                        }
-                        ViewMenuItem("全部", "view_all", state.selectedView == TodoView.All) {
-                            vm.onSelectView(TodoView.All); viewMenuOpen = false
-                        }
-                        ViewMenuItem("已完成", "view_completed", state.selectedView == TodoView.Completed) {
-                            vm.onSelectView(TodoView.Completed); viewMenuOpen = false
-                        }
-                        if (state.todoLists.isNotEmpty()) {
-                            HorizontalDivider()
-                            state.todoLists.forEach { list ->
-                                ViewMenuItem(
-                                    list.name,
-                                    "view_list_${list.id}",
-                                    state.selectedView == TodoView.CustomList(list.id),
-                                ) {
-                                    vm.onSelectView(TodoView.CustomList(list.id)); viewMenuOpen = false
-                                }
+                    ViewMenuItem("收集箱", "view_inbox", state.selectedView == TodoView.Inbox) {
+                        vm.onSelectView(TodoView.Inbox); viewMenuOpen = false
+                    }
+                    ViewMenuItem("最近七天", "view_recent7", state.selectedView == TodoView.RecentSevenDays) {
+                        vm.onSelectView(TodoView.RecentSevenDays); viewMenuOpen = false
+                    }
+                    ViewMenuItem("全部", "view_all", state.selectedView == TodoView.All) {
+                        vm.onSelectView(TodoView.All); viewMenuOpen = false
+                    }
+                    ViewMenuItem("已完成", "view_completed", state.selectedView == TodoView.Completed) {
+                        vm.onSelectView(TodoView.Completed); viewMenuOpen = false
+                    }
+                    if (state.todoLists.isNotEmpty()) {
+                        HorizontalDivider()
+                        state.todoLists.forEach { list ->
+                            ViewMenuItem(
+                                list.name,
+                                "view_list_${list.id}",
+                                state.selectedView == TodoView.CustomList(list.id),
+                            ) {
+                                vm.onSelectView(TodoView.CustomList(list.id)); viewMenuOpen = false
                             }
                         }
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("新建清单") },
-                            onClick = { showCreateList = true; viewMenuOpen = false },
-                            modifier = Modifier.testTag("view_create_list"),
-                        )
-                        DropdownMenuItem(
-                            text = { Text("管理清单") },
-                            onClick = { showManageLists = true; viewMenuOpen = false },
-                            enabled = state.todoLists.isNotEmpty(),
-                            modifier = Modifier.testTag("view_manage_lists"),
-                        )
                     }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("新建清单") },
+                        onClick = { showCreateList = true; viewMenuOpen = false },
+                        modifier = Modifier.testTag("view_create_list"),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("管理清单") },
+                        onClick = { showManageLists = true; viewMenuOpen = false },
+                        enabled = state.todoLists.isNotEmpty(),
+                        modifier = Modifier.testTag("view_manage_lists"),
+                    )
                 }
             }
         }
-        item { StorageStatus(state, vm::onRetryStorage) }
+        item {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                StorageStatus(state, vm::onRetryStorage)
+            }
+        }
         if (state.missedReminders.isNotEmpty()) {
             item {
-                MissedRemindersCard(
-                    reminders = state.missedReminders,
-                    zone = vm.zoneId,
-                    enabled = enabled,
-                    onComplete = vm::onComplete,
-                    onReschedule = vm::onOpenDetail,
-                )
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    MissedRemindersCard(
+                        reminders = state.missedReminders,
+                        zone = vm.zoneId,
+                        enabled = enabled,
+                        onComplete = vm::onComplete,
+                        onReschedule = vm::onOpenDetail,
+                    )
+                }
             }
         }
         if (showCreateList) {
             item {
-                CreateListPanel(
-                    onCreate = { vm.onCreateList(it); showCreateList = false },
-                    onDismiss = { showCreateList = false },
-                )
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    CreateListPanel(
+                        onCreate = { vm.onCreateList(it); showCreateList = false },
+                        onDismiss = { showCreateList = false },
+                    )
+                }
             }
         }
         if (showManageLists) {
             item {
-                ManageListsPanel(
-                    lists = state.todoLists,
-                    onRename = { id, name -> vm.onRenameList(id, name) },
-                    onDelete = { vm.onDeleteList(it) },
-                    onDismiss = { showManageLists = false },
-                )
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    ManageListsPanel(
+                        lists = state.todoLists,
+                        onRename = { id, name -> vm.onRenameList(id, name) },
+                        onDelete = { vm.onDeleteList(it) },
+                        onDismiss = { showManageLists = false },
+                    )
+                }
             }
         }
         if (state.selectedView.supportsUnscheduledFilter) {
             item {
-                FilterChip(
-                    selected = state.unscheduledOnly,
-                    onClick = vm::onToggleUnscheduledFilter,
-                    label = { Text("仅未安排时间") },
-                    enabled = enabled,
-                    modifier = Modifier.testTag("unscheduled_filter"),
-                )
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    FilterChip(
+                        selected = state.unscheduledOnly,
+                        onClick = vm::onToggleUnscheduledFilter,
+                        label = { Text("仅未安排时间") },
+                        enabled = enabled,
+                        modifier = Modifier.testTag("unscheduled_filter"),
+                    )
+                }
             }
         }
         item {
-            InputError(state.inputError)
-            Message(state.message)
-            HorizontalDivider()
-            Text("${visible.size} 项", style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.testTag("view_count"))
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                InputError(state.inputError)
+                Message(state.message)
+                HorizontalDivider()
+                Text("${visible.size} 项", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.testTag("view_count"))
+            }
         }
         if (visible.isEmpty()) {
-            item { Text(emptyText, style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("empty_view")) }
+            item {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(emptyText, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("empty_view"))
+                }
+            }
         }
         val completedView = state.selectedView == TodoView.Completed
         val displayGroups = buildDisplayGroups(visible, today)
@@ -324,14 +392,16 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
             if (group.backlog && backlogSeriesId != null) {
                 val expanded = backlogSeriesId in state.expandedBacklogSeries
                 item(key = "backlog_$backlogSeriesId") {
-                    BacklogHeader(
-                        seriesId = backlogSeriesId,
-                        count = group.items.size,
-                        label = state.seriesLabels[backlogSeriesId],
-                        expanded = expanded,
-                        enabled = enabled,
-                        onToggle = { vm.onToggleBacklog(backlogSeriesId) },
-                    )
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                        BacklogHeader(
+                            seriesId = backlogSeriesId,
+                            count = group.items.size,
+                            label = state.seriesLabels[backlogSeriesId],
+                            expanded = expanded,
+                            enabled = enabled,
+                            onToggle = { vm.onToggleBacklog(backlogSeriesId) },
+                        )
+                    }
                 }
             }
             val rows = if (group.backlog) {
@@ -349,49 +419,11 @@ private fun TodoHomeScreen(vm: TodoViewModel, state: UiState, enabled: Boolean) 
                         enabled = enabled,
                         onOpen = { vm.onOpenDetail(child.id) },
                         onAction = { if (completedView) vm.onRestore(child.id) else vm.onComplete(child.id) },
-                        onDelete = { vm.onDelete(child.id) },
-                        onRetry = { vm.onRetryReminders(child.id) },
+                        onMore = { onOpenInfo(child.id) },
                     )
                 }
             }
         }
-        }
-        VoiceMicButton(
-            enabled = enabled,
-            onClick = { vm.onOpenAdd(startVoice = true) },
-            onLongClick = { vm.onOpenFullManualForm() },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun VoiceMicButton(
-    enabled: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        shadowElevation = 6.dp,
-        modifier = modifier
-            .size(56.dp)
-            .testTag("voice_mic_button")
-            .combinedClickable(
-                enabled = enabled,
-                onClick = onClick,
-                onLongClick = onLongClick,
-            ),
-    ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Icon(
-                Icons.Default.Mic,
-                contentDescription = "语音添加；长按打开完整手动表单",
-            )
         }
     }
 }
@@ -1483,67 +1515,207 @@ internal fun DateField(label: String, format: String, value: String, tag: String
     }
 }
 
+private val CompletedCheckColor = Color(0xFF7C8DA6)
+
+private fun reminderStatusLabel(reminder: TodoReminder): String = when {
+    reminder.deliveredAt != null -> "已提醒"
+    reminder.outcome == ReminderOutcome.Scheduled -> "已安排"
+    reminder.outcome == ReminderOutcome.NotReady -> "未就绪"
+    else -> "未安排"
+}
+
+private fun reminderStatusColor(reminder: TodoReminder, scheme: ColorScheme): Color = when {
+    reminder.outcome == ReminderOutcome.NotReady -> scheme.error
+    reminder.outcome == ReminderOutcome.Scheduled -> scheme.primary
+    else -> scheme.onSurfaceVariant
+}
+
 @Composable
-private fun ItemRow(item: TodoItem, state: UiState, zone: ZoneId, tag: String, enabled: Boolean,
-    onOpen: () -> Unit, onAction: () -> Unit, onDelete: () -> Unit, onRetry: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().testTag(tag).clickable(enabled = enabled, onClick = onOpen)) {
-        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-            Text(item.title, fontWeight = FontWeight.Medium)
-            if (item.note.isNotBlank()) {
-                Text(
-                    item.note,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("todo_note_${item.id}"),
+private fun itemTimeSummary(item: TodoItem, state: UiState, zone: ZoneId): AnnotatedString {
+    val scheme = MaterialTheme.colorScheme
+    return buildAnnotatedString {
+        var started = false
+        fun separator() {
+            if (started) append(" · ") else started = true
+        }
+        item.dueAt?.let { due ->
+            separator()
+            append("截止 ")
+            if (item.isOverdue(state.now)) {
+                withStyle(SpanStyle(color = scheme.error, fontWeight = FontWeight.Medium)) { append("已逾期") }
+                append(" ")
+            }
+            append(due.atZone(zone).format(timeFmt))
+        }
+        if (item.reminders.isNotEmpty()) {
+            separator()
+            append("提醒 ")
+            if (item.reminders.size == 1) {
+                val reminder = item.reminders.first()
+                append(reminder.at.atZone(zone).format(timeFmt))
+                append(" ")
+                withStyle(SpanStyle(color = reminderStatusColor(reminder, scheme))) {
+                    append(reminderStatusLabel(reminder))
+                }
+            } else {
+                append("${item.reminders.size} 条")
+                if (item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
+                    append(" ")
+                    withStyle(SpanStyle(color = scheme.error)) { append("含未就绪") }
+                }
+            }
+        } else if (item.remindAt != null) {
+            separator()
+            append("提醒 ")
+            append(item.remindAt.atZone(zone).format(timeFmt))
+            if (item.id in state.deliveredIds) {
+                append(" ")
+                withStyle(SpanStyle(color = scheme.primary)) { append("已提醒") }
+            }
+        } else {
+            separator()
+            append("提醒 ")
+            withStyle(SpanStyle(color = scheme.onSurfaceVariant)) { append("未安排") }
+        }
+    }
+}
+
+@Composable
+private fun ItemRow(
+    item: TodoItem,
+    state: UiState,
+    zone: ZoneId,
+    tag: String,
+    enabled: Boolean,
+    onOpen: () -> Unit,
+    onAction: () -> Unit,
+    onMore: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val actionWidthPx = with(density) { 88.dp.toPx() }
+    var offsetX by remember(item.id) { mutableFloatStateOf(0f) }
+    val completed = item.completedAt != null
+    val titleColor = if (completed) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val summary = itemTimeSummary(item, state, zone)
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .background(MaterialTheme.colorScheme.primary),
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(88.dp)
+                .clickable(enabled = enabled) {
+                    onMore()
+                    offsetX = 0f
+                }
+                .testTag("swipe_info_${item.id}"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = "事项信息",
+                    tint = MaterialTheme.colorScheme.onPrimary,
                 )
+                Text("信息", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelSmall)
             }
-            Text("象限：${item.quadrant.label}", style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("todo_quadrant_${item.id}"))
-            item.listId?.let { listId ->
-                state.todoLists.firstOrNull { it.id == listId }?.let {
-                    Text("清单：${it.name}", style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.testTag("todo_list_name_${item.id}"))
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .background(MaterialTheme.colorScheme.surface)
+                .pointerInput(item.id) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            offsetX = if (offsetX < -actionWidthPx / 2f) -actionWidthPx else 0f
+                        },
+                        onDragCancel = { offsetX = 0f },
+                        onHorizontalDrag = { _, delta ->
+                            offsetX = (offsetX + delta).coerceIn(-actionWidthPx, 0f)
+                        },
+                    )
                 }
-            }
-            if (item.seriesId != null) {
-                Text("重复实例${state.seriesLabels[item.seriesId]?.let { " · $it" } ?: ""}",
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.testTag("recurrence_${item.id}"))
-            }
-            item.plannedDate?.let { Text("计划：$it", style = MaterialTheme.typography.bodySmall) }
-            item.dueAt?.let { Text("截止：${it.atZone(zone).format(timeFmt)}", style = MaterialTheme.typography.bodySmall) }
-            if (item.reminders.isEmpty()) {
-                Text(item.remindAt?.let { "提醒：${it.atZone(zone).format(timeFmt)}" } ?: "无提醒",
-                    style = MaterialTheme.typography.bodySmall)
-            } else item.reminders.forEachIndexed { index, reminder ->
-                val rule = reminder.beforeDue?.let { "截止前 ${it.toMinutes()} 分钟" } ?: "指定"
-                val status = when {
-                    reminder.deliveredAt != null -> "已提醒"
-                    reminder.outcome == ReminderOutcome.Scheduled -> "已安排"
-                    reminder.outcome == ReminderOutcome.NotReady -> "未就绪"
-                    else -> "未安排"
-                }
-                Text("提醒 ${index + 1}：$rule · ${reminder.at.atZone(zone).format(timeFmt)} · $status",
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            ItemStatus(item, state)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onOpen, enabled = enabled, modifier = Modifier.testTag("open_${item.id}")) { Text("详情") }
-                TextButton(onClick = onAction, enabled = enabled,
-                    modifier = Modifier.testTag(if (item.completedAt == null) "complete_${item.id}" else "restore_${item.id}")) {
-                    Text(if (item.completedAt == null) "完成" else "恢复")
-                }
-                TextButton(
-                    onClick = onDelete,
+                .clickable(enabled = enabled, onClick = onOpen)
+                .testTag(tag),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = onAction,
                     enabled = enabled,
-                    modifier = Modifier.testTag("delete_${item.id}"),
-                ) { Text("删除") }
-                if (item.completedAt == null && item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
-                    TextButton(onClick = onRetry, enabled = enabled,
-                        modifier = Modifier.testTag("retry_reminders_${item.id}")) { Text("重试提醒") }
+                    modifier = Modifier.testTag(if (completed) "restore_${item.id}" else "complete_${item.id}"),
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(if (completed) CompletedCheckColor else Color.Transparent)
+                            .border(
+                                width = 2.dp,
+                                color = if (completed) CompletedCheckColor else MaterialTheme.colorScheme.outline,
+                                shape = CircleShape,
+                            ),
+                    ) {
+                        if (completed) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "已完成",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (completed) FontWeight.Normal else FontWeight.Medium,
+                        color = titleColor,
+                        textDecoration = if (completed) TextDecoration.LineThrough else null,
+                    )
+                    if (item.note.isNotBlank()) {
+                        Text(
+                            item.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("summary_${item.id}"),
+                    )
+                }
+                IconButton(
+                    onClick = onMore,
+                    enabled = enabled,
+                    modifier = Modifier.testTag("more_${item.id}"),
+                ) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "事项信息")
                 }
             }
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 64.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
         }
     }
 }
@@ -1556,6 +1728,132 @@ private fun ItemStatus(item: TodoItem, state: UiState) {
         if (item.isOverdue(state.now)) Text("逾期", color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("overdue_${item.id}"), style = MaterialTheme.typography.labelMedium)
         if (item.completedAt != null) Text("已完成", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ItemInfoSheet(
+    item: TodoItem,
+    state: UiState,
+    zone: ZoneId,
+    onDismiss: () -> Unit,
+    onOpenDetail: () -> Unit,
+    onDelete: () -> Unit,
+    onRetryReminders: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("事项信息", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss, modifier = Modifier.testTag("info_sheet_close")) {
+                    Icon(Icons.Default.Close, contentDescription = "关闭")
+                }
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp),
+            ) {
+                Text(item.title, style = MaterialTheme.typography.titleLarge)
+                if (item.note.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        item.note,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                ReminderRows(item, zone)
+                DueRow(item, state.now, zone)
+                QuadrantRow(item)
+            }
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = onOpenDetail,
+                    modifier = Modifier.weight(1f).testTag("info_open_detail"),
+                ) { Text("查看详情") }
+                if (item.completedAt == null && item.reminders.any { it.outcome == ReminderOutcome.NotReady }) {
+                    TextButton(
+                        onClick = onRetryReminders,
+                        modifier = Modifier.weight(1f).testTag("info_retry_reminders"),
+                    ) { Text("重试提醒") }
+                }
+            }
+            TextButton(
+                onClick = onDelete,
+                modifier = Modifier.fillMaxWidth().testTag("info_delete"),
+            ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+@Composable
+private fun ReminderRows(item: TodoItem, zone: ZoneId) {
+    if (item.reminders.isNotEmpty()) {
+        item.reminders.forEachIndexed { index, reminder ->
+            val label = if (item.reminders.size > 1) "提醒 ${index + 1}" else "提醒"
+            InfoRow(label) {
+                Text(buildAnnotatedString {
+                    append(reminder.at.atZone(zone).format(timeFmt))
+                    append(" · ")
+                    withStyle(SpanStyle(color = reminderStatusColor(reminder, MaterialTheme.colorScheme))) {
+                        append(reminderStatusLabel(reminder))
+                    }
+                })
+            }
+        }
+    } else if (item.remindAt != null) {
+        InfoRow("提醒") { Text(item.remindAt.atZone(zone).format(timeFmt)) }
+    } else {
+        InfoRow("提醒") { Text("未安排", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun DueRow(item: TodoItem, now: Instant, zone: ZoneId) {
+    if (item.dueAt != null) {
+        InfoRow("截止") {
+            Text(buildAnnotatedString {
+                append(item.dueAt.atZone(zone).format(timeFmt))
+                if (item.isOverdue(now)) {
+                    append(" ")
+                    withStyle(SpanStyle(color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Medium)) {
+                        append("已逾期")
+                    }
+                }
+            })
+        }
+    } else {
+        InfoRow("截止") { Text("未设置", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun QuadrantRow(item: TodoItem) {
+    InfoRow("四象限") { Text(item.quadrant.label) }
+}
+
+@Composable
+private fun InfoRow(label: String, value: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Top) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(64.dp),
+            )
+            Box(Modifier.weight(1f)) { value() }
+        }
     }
 }
 

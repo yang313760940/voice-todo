@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
             val todoViewModel: TodoViewModel = viewModel()
+            val todoState by todoViewModel.state.collectAsStateWithLifecycle()
             val pomodoroViewModel: PomodoroViewModel = viewModel()
             val appVersion = runCatching {
                 packageManager.getPackageInfo(packageName, 0).versionName
@@ -62,6 +63,12 @@ class MainActivity : ComponentActivity() {
                     onTodoTabLeaveAttempt = todoViewModel::onTabSwitchAttempt,
                     onContinueTodoEditing = todoViewModel::onContinueVoiceEditing,
                     onDiscardTodoDraft = todoViewModel::onDiscardVoiceDraft,
+                    onVoiceClick = { todoViewModel.onOpenAdd(startVoice = true) },
+                    onVoiceLongClick = { todoViewModel.onOpenFullManualForm() },
+                    showVoice = todoState.aiSettingsForm == null &&
+                        todoState.aiDraft == null &&
+                        todoState.detail == null &&
+                        !todoState.addOpen,
                 )
             }
         }
